@@ -1,0 +1,25 @@
+.DS_Store
+.AppleDouble
+.LSOverride
+.claude/
+.codex/
+.agents/
+AGENTS.md
+
+# Local working notes and diagnostics can contain real account, device, and IP data.
+NETWORK-NOTES.md
+UI-NOTES.md
+*-backup*.json
+*.log
+*.env
+.env*
+
+# Generated or local release artifacts.
+TailscaleMenuBar.app/
+*.app/
+*.dSYM/
+*.zip
+*.sha256
+release/
+.build/
+.swiftpm/

@@ -1,0 +1,1181 @@
+import AppKit
+import Foundation
+import ServiceManagement
+import UserNotifications
+
+let tailscaleBin = "/opt/homebrew/opt/tailscale/bin/tailscale"
+let tailscaleSocket = "/var/run/tailscaled.socket"
+
+// MARK: - status --json model
+
+struct TSSelf: Decodable {
+    let UserID: Int64?
+    let TailscaleIPs: [String]?
+    let DNSName: String?
+    let Online: Bool?
+}
+
+struct TSPeer: Decodable {
+    let UserID: Int64?
+    let ID: String?
+    let HostName: String?
+    let DNSName: String?
+    let TailscaleIPs: [String]?
+    let Online: Bool?
+    let LastSeen: String?
+    let Relay: String?
+    let ExitNodeOption: Bool?
+    let OS: String?
+    let Tags: [String]?
+    let RxBytes: Int64?
+    let TxBytes: Int64?
+}
+
+struct TSExitNodeStatus: Decodable {
+    let ID: String?
+    let Online: Bool?
+}
+
+// Fallback patterns from the open-source client/systray/logo.go (BSD-3-Clause).
+// These are NOT the closed-source macOS GUI assets; prefer NativeStatusIcons.
+// 0 = dim dot, 1 = bright dot, row-major, row 0 = top.
+let tsDotsDisconnected: [Int] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+let tsDotsConnected: [Int] = [0, 0, 0, 1, 1, 1, 0, 1, 0]
+let tsLoadingFrames: [[Int]] = [
+    [0, 1, 1, 1, 0, 1, 0, 0, 1],
+    [0, 1, 1, 0, 0, 1, 0, 1, 0],
+    [0, 1, 1, 0, 0, 0, 0, 0, 1],
+    [0, 0, 1, 0, 1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 0],
+    [0, 0, 0, 1, 0, 0, 1, 1, 0],
+    [0, 0, 0, 1, 1, 0, 0, 1, 0],
+    [0, 0, 0, 1, 1, 0, 0, 1, 1],
+    [0, 0, 0, 1, 1, 1, 0, 0, 1],
+    [0, 1, 0, 0, 1, 1, 1, 0, 1],
+]
+
+struct TSTailnet: Decodable {
+    let Name: String?
+}
+
+struct TSStatus: Decodable {
+    var backendState: String?
+    let selfNode: TSSelf?
+    let peer: [String: TSPeer]?
+    let exitNodeStatus: TSExitNodeStatus?
+    let currentTailnet: TSTailnet?
+    let user: [String: TSUser]?
+    let health: [String]?
+    let authURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case backendState = "BackendState"
+        case selfNode = "Self"
+        case peer = "Peer"
+        case exitNodeStatus = "ExitNodeStatus"
+        case currentTailnet = "CurrentTailnet"
+        case user = "User"
+        case health = "Health"
+        case authURL = "AuthURL"
+    }
+}
+
+struct TSUser: Decodable {
+    let LoginName: String?
+    let DisplayName: String?
+}
+
+// MARK: - debug prefs model (undocumented but stable enough for local UI state)
+
+struct TSPrefs: Decodable {
+    let ExitNodeID: String?
+    let ExitNodeAllowLANAccess: Bool?
+    let AdvertiseRoutes: [String]?
+    let RouteAll: Bool?
+    let CorpDNS: Bool?
+    let ShieldsUp: Bool?
+    let WantRunning: Bool?
+    let LoggedOut: Bool?
+}
+
+func fetchPrefs() -> TSPrefs? {
+    let (output, _) = runTailscale(["debug", "prefs"])
+    guard let data = output.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(TSPrefs.self, from: data)
+}
+
+struct TSProfile: Decodable {
+    let id: String
+    let account: String
+    let tailnet: String
+    let selected: Bool
+}
+
+func fetchProfiles() -> [TSProfile] {
+    let (output, _) = runTailscale(["switch", "--list", "--json"])
+    guard let data = output.data(using: .utf8) else { return [] }
+    return (try? JSONDecoder().decode([TSProfile].self, from: data)) ?? []
+}
+
+func formatBytes(_ bytes: Int64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB"]
+    var value = Double(bytes)
+    var idx = 0
+    while value >= 1024 && idx < units.count - 1 {
+        value /= 1024
+        idx += 1
+    }
+    return String(format: idx == 0 ? "%.0f %@" : "%.1f %@", value, units[idx])
+}
+
+// MARK: - CLI helper
+
+@discardableResult
+func runTailscale(_ args: [String]) -> (output: String, exitCode: Int32) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: tailscaleBin)
+    // There is also an official Tailscale Network Extension installed on
+    // this Mac. Pin this UI to the Homebrew daemon it is designed to manage;
+    // otherwise the CLI can discover the other installation and the menu
+    // falls back to "Unknown" or controls a different node identity.
+    process.arguments = ["--socket=\(tailscaleSocket)"] + args
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do {
+        try process.run()
+    } catch {
+        return ("", -1)
+    }
+    let deadline = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+    deadline.schedule(deadline: .now() + (args.first == "up" ? 120 : 12))
+    deadline.setEventHandler { if process.isRunning { process.terminate() } }
+    deadline.resume()
+    defer { deadline.cancel() }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    let output = String(data: data, encoding: .utf8) ?? ""
+    return (output, process.terminationStatus)
+}
+
+func fetchStatus() -> TSStatus? {
+    // tailscale exits 1 when the daemon is stopped but still prints useful
+    // JSON, and status --json returns a stale cached peer list when the
+    // daemon is down — callers must gate on backendState, not exit code.
+    let (output, _) = runTailscale(["status", "--json"])
+    guard let data = output.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(TSStatus.self, from: data)
+}
+
+// MARK: - formatting helpers
+
+func displayName(dnsName: String?, fallback: String) -> String {
+    guard let dnsName = dnsName, !dnsName.isEmpty else { return fallback }
+    let trimmed = dnsName.hasSuffix(".") ? String(dnsName.dropLast()) : dnsName
+    return trimmed.components(separatedBy: ".").first ?? trimmed
+}
+
+func relativeLastSeen(_ iso: String?) -> String {
+    guard let iso = iso else { return "" }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var date = formatter.date(from: iso)
+    if date == nil {
+        formatter.formatOptions = [.withInternetDateTime]
+        date = formatter.date(from: iso)
+    }
+    guard let date = date else { return "" }
+    let interval = -date.timeIntervalSinceNow
+    if interval < 60 { return "seen just now" }
+    if interval < 3600 { return "seen \(Int(interval / 60))m ago" }
+    if interval < 86400 { return "seen \(Int(interval / 3600))h ago" }
+    return "seen \(Int(interval / 86400))d ago"
+}
+
+// MARK: - app delegate
+
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    var statusItem: NSStatusItem!
+    var timer: Timer?
+    var currentStatus: TSStatus?
+    var currentPrefs: TSPrefs?
+    var currentProfiles: [TSProfile] = []
+    var refreshing = false
+    var previousBackendState: String?
+    var previousExitNodeID: String?
+    var proxyStatus = "Проверяем…"
+    var clientTransport = ClientTransportStatus()
+    var transportDot: TransportDotView?
+    var workspaceObservers: [NSObjectProtocol] = []
+    var routeStatus = "Маршрут ещё не проверен"
+    var nativeIcons = NativeStatusIcons()
+    var dashboard: DashboardController?
+    var eventProcess: Process?
+    var eventPipe: Pipe?
+    var eventParser = JSONObjectStream()
+    var eventRefresh: DispatchWorkItem?
+    var terminating = false
+    var refreshAgain = false
+    var stateRevision = 0
+    var trackingMenu = false
+    var commandInProgress = false
+    var animationTimer: Timer?
+    var animationFrame = 0
+    var loginInProgress = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = nativeIcons.image("StatusBarIconDimmed") ?? matrixIcon(.dim)
+        statusItem.button?.image?.isTemplate = true
+        if let button = statusItem.button {
+            let dot = TransportDotView(frame: button.bounds)
+            dot.autoresizingMask = [.width, .height]
+            button.addSubview(dot)
+            transportDot = dot
+        }
+
+        let menu = NSMenu()
+        menu.delegate = self
+        statusItem.menu = menu
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+
+        // The menu-bar app is only a UI. Do not change the daemon state when
+        // the UI launches: this would disconnect an already-working VPN and
+        // discard an active exit node every time the app is restarted.
+        refresh()
+        startEventWatcher()
+        timer = Timer(timeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+        RunLoop.main.add(timer!, forMode: .common)
+        buildApplicationMenu()
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.refresh()
+            })
+        }
+        // Cold launch is menu-bar only. A subsequent Dock/open event is
+        // handled by applicationShouldHandleReopen and presents the window.
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        trackingMenu = true
+        refresh()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        trackingMenu = false
+        rebuildMenu(status: currentStatus)
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        for entry in menu.items {
+            (entry.view as? MenuConnectionHeader)?.setMenuHighlighted(entry === item)
+        }
+    }
+
+    func refresh() {
+        if refreshing { refreshAgain = true; return }
+        refreshing = true
+        let revision = stateRevision
+        let clients = ClientTransportStatus.runningClientsNow()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = fetchStatus()
+            let prefs = fetchPrefs()
+            let profiles = fetchProfiles()
+            let port = [10808, 10809, 10820].first { self.isPortOpen($0) }
+            let proxy = port.map { "\($0 == 10808 ? "INCY" : "Happ") · 127.0.0.1:\($0)" } ?? "не обнаружен"
+            let route = self.readRouteStatus(status)
+            DispatchQueue.main.async {
+                if self.stateRevision != revision {
+                    self.refreshing = false
+                    self.refreshAgain = false
+                    self.refresh()
+                    return
+                }
+                self.notifyOnChanges(newStatus: status)
+                self.currentStatus = status
+                self.currentPrefs = prefs
+                self.currentProfiles = profiles
+                self.proxyStatus = proxy
+                self.clientTransport = ClientTransportStatus(runningClients: clients, proxyPort: port, checked: true)
+                self.routeStatus = route
+                if !self.trackingMenu { self.rebuildMenu(status: status) }
+                self.applyIconUpdate(status: status)
+                self.updateDashboard()
+                self.refreshing = false
+                if self.refreshAgain { self.refreshAgain = false; self.refresh() }
+            }
+        }
+    }
+
+    // MARK: icon — 3x3 dot matrix, ported directly from Tailscale's own
+    // client/systray/logo.go geometry (radius=25, dim=250 → here scaled to
+    // an 18x18 canvas: spacing 0.3, dot centers at 0.2/0.5/0.8, radius 0.1).
+
+    enum MatrixState {
+        case dim
+        case connected
+        case exitNode(online: Bool)
+        case wave(frame: Int)
+    }
+
+    func matrixIcon(_ state: MatrixState) -> NSImage {
+        let resource: String
+        switch state {
+        case .dim: resource = "StatusBarIconDimmed"
+        case .connected: resource = "StatusBarIcon"
+        case .exitNode(let online): resource = online ? "StatusBarIconDefaultRouterOnline" : "StatusBarIconDefaultRouterOffline"
+        case .wave(let frame): resource = nativeIcons.hasAnimation ? "StatusBarIconDot\(frame % 16 + 1)" : ""
+        }
+        if let native = nativeIcons.image(resource) { return native }
+        let canvasSize = NSSize(width: 18, height: 18)
+        let dotRadius: CGFloat = 1.8
+        let spacing: CGFloat = 5.4
+        let originX: CGFloat = 3.6
+        let originY: CGFloat = 3.6
+        let grayAlpha: CGFloat = 102.0 / 255.0 // matches logo.go's darkGray
+
+        let dots: [Int]
+        switch state {
+        case .dim: dots = tsDotsDisconnected
+        case .connected, .exitNode: dots = tsDotsConnected
+        case .wave(let frame): dots = tsLoadingFrames[frame % tsLoadingFrames.count]
+        }
+
+        let img = NSImage(size: canvasSize, flipped: false) { _ in
+            for row in 0..<3 {
+                for col in 0..<3 {
+                    let cx = originX + CGFloat(col) * spacing
+                    let cy = originY + CGFloat(2 - row) * spacing // row 0 = top
+                    let on = dots[row * 3 + col] != 0
+                    NSColor.black.withAlphaComponent(on ? 1.0 : grayAlpha).setFill()
+                    let dotRect = NSRect(x: cx - dotRadius, y: cy - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+                    NSBezierPath(ovalIn: dotRect).fill()
+                }
+            }
+
+            if case .exitNode(let online) = state {
+                // arrow (or, if the exit node is unreachable, an X) overlapping
+                // the bottom-right dots — same position logo.go draws it at:
+                // x in [0.45, 0.95] of the canvas, y at the bottom row's height.
+                let x1 = canvasSize.width * 0.45
+                let x2 = canvasSize.width * 0.95
+                let y = originY // bottom row height
+                let tipSpread: CGFloat = 2.7
+
+                guard let ctx = NSGraphicsContext.current else { return true }
+                ctx.compositingOperation = .destinationOut
+                NSColor.black.setStroke() // full opacity — destinationOut erases proportionally to source alpha
+                let mask = NSBezierPath()
+                mask.lineWidth = 5.4
+                mask.lineCapStyle = .round
+                mask.move(to: NSPoint(x: x1, y: y)); mask.line(to: NSPoint(x: x2, y: y))
+                mask.move(to: NSPoint(x: x2 - tipSpread, y: y + tipSpread)); mask.line(to: NSPoint(x: x2, y: y))
+                mask.move(to: NSPoint(x: x2 - tipSpread, y: y - tipSpread)); mask.line(to: NSPoint(x: x2, y: y))
+                mask.stroke()
+                ctx.compositingOperation = .sourceOver
+
+                NSColor.black.setStroke()
+                let overlay = NSBezierPath()
+                overlay.lineWidth = 1.8
+                overlay.lineCapStyle = .round
+                if online {
+                    overlay.move(to: NSPoint(x: x1, y: y)); overlay.line(to: NSPoint(x: x2, y: y))
+                    overlay.move(to: NSPoint(x: x2 - tipSpread, y: y + tipSpread)); overlay.line(to: NSPoint(x: x2, y: y))
+                    overlay.move(to: NSPoint(x: x2 - tipSpread, y: y - tipSpread)); overlay.line(to: NSPoint(x: x2, y: y))
+                } else {
+                    // logo.go draws this in red; kept monochrome here so the
+                    // whole icon can stay a theme-adapting template image.
+                    overlay.move(to: NSPoint(x: x1 + 1, y: y + tipSpread)); overlay.line(to: NSPoint(x: x2 - 1, y: y - tipSpread))
+                    overlay.move(to: NSPoint(x: x1 + 1, y: y - tipSpread)); overlay.line(to: NSPoint(x: x2 - 1, y: y + tipSpread))
+                }
+                overlay.stroke()
+            }
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
+    // Not part of the real Tailscale icon set (logo.go has no error/warning
+    // variant) — a small addition to surface Health issues, so it fully
+    // replaces the base icon rather than partially overlaying it (a partial
+    // overlay let the grid's own dots peek out around the triangle).
+    func warningIcon() -> NSImage {
+        let canvasSize = NSSize(width: 18, height: 18)
+        let img = NSImage(size: canvasSize, flipped: false) { _ in
+            guard let symbol = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil) else { return true }
+            let config = NSImage.SymbolConfiguration(pointSize: canvasSize.height * 0.72, weight: .bold)
+            let configured = symbol.withSymbolConfiguration(config) ?? symbol
+            let badgeSize = configured.size
+            let badgeRect = NSRect(
+                x: (canvasSize.width - badgeSize.width) / 2,
+                y: (canvasSize.height - badgeSize.height) / 2,
+                width: badgeSize.width, height: badgeSize.height
+            )
+            NSColor.black.set()
+            configured.draw(in: badgeRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
+    func updateIcon(status: TSStatus?) {
+        guard let button = statusItem.button else { return }
+
+        var base: NSImage
+        var description: String
+
+        if let status = status, let state = status.backendState {
+            switch state {
+            case "Running":
+                if status.exitNodeStatus?.ID != nil {
+                    let online = status.exitNodeStatus?.Online ?? true
+                    base = matrixIcon(.exitNode(online: online))
+                    description = online ? "Tailscale: connected, exit node active" : "Tailscale: exit node unreachable"
+                } else {
+                    base = matrixIcon(.connected)
+                    description = "Tailscale: connected"
+                }
+                stopAnimating()
+            case "Starting":
+                startAnimatingIfNeeded()
+                base = matrixIcon(.wave(frame: animationFrame))
+                description = "Tailscale: connecting…"
+            default:
+                // logo.go's own switch treats every non-Running/Starting
+                // state (Stopped, NeedsLogin, NoState, ...) as "disconnected"
+                // — there's no separate icon for needing login.
+                base = matrixIcon(.dim)
+                description = state == "NeedsLogin" ? "Tailscale: needs login" : "Tailscale: disconnected"
+                stopAnimating()
+            }
+        } else {
+            base = matrixIcon(.dim)
+            description = "Tailscale: unknown"
+            stopAnimating()
+        }
+
+        // "Health" always includes routine status lines like "Tailscale is
+        // stopped." while disconnected — only surface it as a warning when
+        // we're otherwise Running but something's actually wrong (e.g. a
+        // relay is unreachable).
+        if status?.backendState == "Running", let health = status?.health, !health.isEmpty {
+            description += " — \(health.count) health warning\(health.count == 1 ? "" : "s")"
+            base = nativeIcons.image("StatusBarIconErrorOnline") ?? base
+        }
+
+        base.isTemplate = true
+        base.accessibilityDescription = description
+        button.image = base
+        transportDot?.indicator = clientTransport.indicator
+        button.toolTip = description + "\n" + clientTransport.menuSummary
+    }
+
+    // Never hold a stale connecting state for a cosmetic minimum duration.
+    func applyIconUpdate(status: TSStatus?) {
+        updateIcon(status: status)
+    }
+
+    // Redraws the current wave frame directly, without re-deriving state from
+    // (possibly stale) currentStatus. Only refresh()'s call to updateIcon —
+    // which has genuinely fresh status — is allowed to stop the animation;
+    // if the timer tick also re-evaluated stale status it could see a
+    // pre-click "Stopped" and call stopAnimating() before a single frame
+    // had a chance to show, which is exactly what was happening before.
+    func renderWaveFrame() {
+        guard let button = statusItem.button else { return }
+        let icon = matrixIcon(.wave(frame: animationFrame))
+        icon.isTemplate = true
+        icon.accessibilityDescription = "Tailscale: connecting…"
+        button.image = icon
+    }
+
+    func startAnimatingIfNeeded() {
+        guard animationTimer == nil else { return }
+        renderWaveFrame()
+        // 500 ms is documented in the open-source systray, not verified as
+        // the closed-source macOS client's timing. Native assets have 16 frames.
+        animationTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.animationFrame = (self.animationFrame + 1) % (self.nativeIcons.hasAnimation ? 16 : tsLoadingFrames.count)
+            self.renderWaveFrame()
+        }
+        RunLoop.main.add(animationTimer!, forMode: .common)
+    }
+
+    func stopAnimating() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+        animationFrame = 0
+    }
+
+    // Composites a small solid dot into the bottom-right corner of the base
+    // icon, with a transparent gap punched around it for legibility. The
+    // result stays a single-color template image so it still adapts to the
+    // menu bar's light/dark appearance — a colored badge would need to break
+    // template rendering and look wrong in light mode.
+    func badgedIcon(base: NSImage, description: String) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        let baseConfigured = base.withSymbolConfiguration(config) ?? base
+        let canvasSize = NSSize(width: 18, height: 18)
+
+        let composed = NSImage(size: canvasSize, flipped: false) { rect in
+            NSColor.black.set()
+            baseConfigured.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+
+            guard let ctx = NSGraphicsContext.current else { return true }
+            ctx.compositingOperation = .destinationOut
+            NSColor.black.setFill() // full opacity — base's own drawing may have left a translucent fill color active
+            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 9, y: -1.5, width: 9, height: 9)).fill()
+            ctx.compositingOperation = .sourceOver
+
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 6.5, y: 0.5, width: 6, height: 6)).fill()
+            return true
+        }
+        composed.isTemplate = true
+        composed.accessibilityDescription = description
+        return composed
+    }
+
+    // MARK: menu
+
+    func rebuildMenu(status: TSStatus?) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        let state = currentPrefs?.LoggedOut == true ? "NeedsLogin" : (status?.backendState ?? "Unknown")
+        let busy = loginInProgress || commandInProgress
+        let title = busy ? "Updating…" : (["Running": "Connected", "Stopped": "Disconnected", "Starting": "Connecting…", "NeedsLogin": "Needs login"][state] ?? state)
+        let header = NSMenuItem()
+        header.view = MenuConnectionHeader(state: title, connected: state == "Running",
+            enabled: !busy && ["Running", "Stopped", "NeedsLogin"].contains(state)) { [weak self, weak menu] in
+                menu?.cancelTracking()
+                guard let self = self else { return }
+                if state == "NeedsLogin" { self.startConnectOrLogin() }
+                else { self.toggleConnection(NSMenuItem()) }
+            }
+        menu.addItem(header)
+        menu.addItem(.separator())
+
+        let accountName = currentProfiles.first(where: { $0.selected })?.account ?? status?.currentTailnet?.Name ?? "Account"
+        let account = NSMenuItem(title: accountName, action: nil, keyEquivalent: "")
+        let accountTitle = NSMutableAttributedString(string: accountName + "\n", attributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)])
+        accountTitle.append(NSAttributedString(string: status?.currentTailnet?.Name ?? "Account", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+        account.attributedTitle = accountTitle
+        account.image = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor(white: 0.16, alpha: 1).setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+            return true
+        }
+        account.submenu = buildAccountMenu()
+        menu.addItem(account)
+        menu.addItem(.separator())
+
+        if let me = status?.selfNode, let ip = me.TailscaleIPs?.first {
+            let name = displayName(dnsName: me.DNSName, fallback: "This Mac")
+            let device = NSMenuItem(title: "This Device: \(name) (\(ip))", action: #selector(copyToClipboard(_:)), keyEquivalent: "")
+            device.target = self
+            device.representedObject = ip
+            device.toolTip = "Copy this device's Tailscale address"
+            menu.addItem(device)
+        }
+        let network = NSMenuItem(title: "Network Devices", action: nil, keyEquivalent: "")
+        let devices = NSMenu()
+        let peers = status?.peer?.values.sorted {
+            displayName(dnsName: $0.DNSName, fallback: $0.HostName ?? "") <
+            displayName(dnsName: $1.DNSName, fallback: $1.HostName ?? "")
+        } ?? []
+        for peer in peers { devices.addItem(peerMenuItem(peer)) }
+        network.submenu = devices
+        network.isEnabled = state == "Running" && !peers.isEmpty
+        menu.addItem(network)
+        menu.addItem(.separator())
+
+        let exit = NSMenuItem(title: "Exit Nodes", action: nil, keyEquivalent: "")
+        exit.submenu = buildExitNodeMenu(status: status)
+        exit.isEnabled = state == "Running" && !busy
+        menu.addItem(exit)
+        menu.addItem(.separator())
+        let transport = NSMenuItem(title: clientTransport.menuSummary, action: nil, keyEquivalent: "")
+        transport.isEnabled = false
+        transport.toolTip = clientTransport.explanation
+        menu.addItem(transport)
+        menu.addItem(.separator())
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettingsWindow(_:)), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        let open = NSMenuItem(title: "Open Tailnet Bridge", action: #selector(showDashboard(_:)), keyEquivalent: "")
+        open.target = self
+        menu.addItem(open)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit", action: #selector(quitApp(_:)), keyEquivalent: "q")
+        quit.target = self
+        quit.toolTip = "Quit the interface; VPN stays active"
+        menu.addItem(quit)
+        statusItem.menu = menu
+    }
+
+    func buildAccountMenu() -> NSMenu {
+        let menu = buildSwitchAccountMenu()
+        menu.addItem(.separator())
+        let admin = NSMenuItem(title: "Admin console…", action: #selector(openAdminConsole), keyEquivalent: "")
+        admin.target = self
+        menu.addItem(admin)
+        let logout = NSMenuItem(title: "Log out", action: #selector(logOut), keyEquivalent: "")
+        logout.target = self
+        menu.addItem(logout)
+        return menu
+    }
+
+    func buildSwitchAccountMenu() -> NSMenu {
+        let submenu = NSMenu()
+        if currentProfiles.isEmpty {
+            let item = NSMenuItem(title: "(unavailable)", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            submenu.addItem(item)
+            return submenu
+        }
+        for profile in currentProfiles {
+            let item = NSMenuItem(title: "\(profile.account) — \(profile.tailnet)", action: #selector(switchAccount(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = profile.id
+            item.state = profile.selected ? .on : .off
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    func buildExitNodeMenu(status: TSStatus?) -> NSMenu {
+        let submenu = NSMenu()
+        let activeID = status?.exitNodeStatus?.ID
+
+        let noneItem = NSMenuItem(title: "None", action: #selector(selectExitNode(_:)), keyEquivalent: "")
+        noneItem.target = self
+        noneItem.representedObject = ""
+        noneItem.state = (activeID == nil) ? .on : .off
+        submenu.addItem(noneItem)
+
+        let allPeers: [TSPeer] = status?.peer.map { Array($0.values) } ?? []
+        let candidates = allPeers.filter { $0.ExitNodeOption == true }
+            .sorted { displayName(dnsName: $0.DNSName, fallback: $0.HostName ?? "") < displayName(dnsName: $1.DNSName, fallback: $1.HostName ?? "") }
+
+        if !candidates.isEmpty {
+            submenu.addItem(NSMenuItem.separator())
+            for peer in candidates {
+                let name = displayName(dnsName: peer.DNSName, fallback: peer.HostName ?? "unknown")
+                let item = NSMenuItem(title: name, action: #selector(selectExitNode(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = peer.TailscaleIPs?.first ?? ""
+                item.state = (peer.ID != nil && peer.ID == activeID) ? .on : .off
+                submenu.addItem(item)
+            }
+        }
+
+        submenu.addItem(NSMenuItem.separator())
+
+        let allowLAN = NSMenuItem(title: "Allow local network access", action: #selector(toggleAllowLAN(_:)), keyEquivalent: "")
+        allowLAN.target = self
+        allowLAN.state = (currentPrefs?.ExitNodeAllowLANAccess == true) ? .on : .off
+        submenu.addItem(allowLAN)
+
+        let advertise = NSMenuItem(title: "Run this device as exit node", action: #selector(toggleAdvertiseExitNode(_:)), keyEquivalent: "")
+        advertise.target = self
+        advertise.state = (currentPrefs?.AdvertiseRoutes?.contains("0.0.0.0/0") == true) ? .on : .off
+        submenu.addItem(advertise)
+
+        return submenu
+    }
+
+    func buildPreferencesMenu() -> NSMenu {
+        let submenu = NSMenu()
+
+        let acceptRoutes = NSMenuItem(title: "Use Tailscale subnets", action: #selector(togglePref(_:)), keyEquivalent: "")
+        acceptRoutes.target = self
+        acceptRoutes.representedObject = "accept-routes"
+        acceptRoutes.state = (currentPrefs?.RouteAll == true) ? .on : .off
+        submenu.addItem(acceptRoutes)
+
+        let acceptDNS = NSMenuItem(title: "Use Tailscale DNS", action: #selector(togglePref(_:)), keyEquivalent: "")
+        acceptDNS.target = self
+        acceptDNS.representedObject = "accept-dns"
+        acceptDNS.state = (currentPrefs?.CorpDNS == true) ? .on : .off
+        submenu.addItem(acceptDNS)
+
+        let allowIncoming = NSMenuItem(title: "Allow incoming connections", action: #selector(togglePref(_:)), keyEquivalent: "")
+        allowIncoming.target = self
+        allowIncoming.representedObject = "allow-incoming"
+        allowIncoming.state = (currentPrefs?.ShieldsUp == false) ? .on : .off
+        submenu.addItem(allowIncoming)
+
+        submenu.addItem(NSMenuItem.separator())
+
+        let launchAtLogin = NSMenuItem(title: "Launch at login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        launchAtLogin.target = self
+        launchAtLogin.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        submenu.addItem(launchAtLogin)
+
+        submenu.addItem(NSMenuItem.separator())
+
+        let happItem = NSMenuItem(title: "Local proxy: \(proxyStatus)", action: nil, keyEquivalent: "")
+        happItem.isEnabled = false
+        submenu.addItem(happItem)
+
+        return submenu
+    }
+
+    func happProxyStatusText() -> String {
+        for port in [10808, 10809, 10820] where isPortOpen(port) {
+            return "detected on :\(port)"
+        }
+        return "not detected (direct)"
+    }
+
+    func isPortOpen(_ port: Int) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+        process.arguments = ["-z", "-w1", "127.0.0.1", "\(port)"]
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    func peerMenuItem(_ peer: TSPeer) -> NSMenuItem {
+        let name = displayName(dnsName: peer.DNSName, fallback: peer.HostName ?? "unknown")
+        let online = peer.Online == true
+        let dot = online ? "●" : "○"
+        let osTag = peer.OS.map { " [\($0)]" } ?? ""
+        let title = "\(dot) \(name)\(osTag)"
+
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        let statusLine = NSMenuItem(title: online ? "Online" : relativeLastSeen(peer.LastSeen), action: nil, keyEquivalent: "")
+        statusLine.isEnabled = false
+        submenu.addItem(statusLine)
+
+        if let ip = peer.TailscaleIPs?.first {
+            let ipLine = NSMenuItem(title: ip, action: nil, keyEquivalent: "")
+            ipLine.isEnabled = false
+            submenu.addItem(ipLine)
+        }
+
+        if let relay = peer.Relay, !relay.isEmpty {
+            let relayItem = NSMenuItem(title: "Relay: \(relay)", action: nil, keyEquivalent: "")
+            relayItem.isEnabled = false
+            submenu.addItem(relayItem)
+        }
+
+        if let tx = peer.TxBytes, let rx = peer.RxBytes, tx + rx > 0 {
+            let trafficItem = NSMenuItem(title: "↑ \(formatBytes(tx))   ↓ \(formatBytes(rx))", action: nil, keyEquivalent: "")
+            trafficItem.isEnabled = false
+            submenu.addItem(trafficItem)
+        }
+
+        submenu.addItem(NSMenuItem.separator())
+
+        if let ip = peer.TailscaleIPs?.first {
+            let copyIP = NSMenuItem(title: "Copy IP", action: #selector(copyToClipboard(_:)), keyEquivalent: "")
+            copyIP.target = self
+            copyIP.representedObject = ip
+            submenu.addItem(copyIP)
+
+            let pingItem = NSMenuItem(title: "Ping", action: #selector(pingPeer(_:)), keyEquivalent: "")
+            pingItem.target = self
+            pingItem.representedObject = ip
+            submenu.addItem(pingItem)
+
+            let openItem = NSMenuItem(title: "Open in browser", action: #selector(openInBrowser(_:)), keyEquivalent: "")
+            openItem.target = self
+            openItem.representedObject = ip
+            submenu.addItem(openItem)
+
+            let sendFileItem = NSMenuItem(title: "Send file…", action: #selector(sendFileToPeer(_:)), keyEquivalent: "")
+            sendFileItem.target = self
+            sendFileItem.representedObject = ip
+            submenu.addItem(sendFileItem)
+        }
+
+        if let dnsName = peer.DNSName, !dnsName.isEmpty {
+            let copyDNS = NSMenuItem(title: "Copy DNS name", action: #selector(copyToClipboard(_:)), keyEquivalent: "")
+            copyDNS.target = self
+            copyDNS.representedObject = dnsName.hasSuffix(".") ? String(dnsName.dropLast()) : dnsName
+            submenu.addItem(copyDNS)
+        }
+
+        item.submenu = submenu
+        return item
+    }
+
+    // MARK: actions
+
+    @objc func quitApp(_ sender: NSMenuItem) {
+        NSApp.terminate(nil)
+    }
+
+    @objc func toggleConnection(_ sender: NSMenuItem) {
+        guard !commandInProgress && !loginInProgress else { return }
+        let isRunning = currentStatus?.backendState == "Running"
+        if isRunning {
+            commandInProgress = true
+            updateDashboard()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (output, code) = runTailscale(["down"])
+                DispatchQueue.main.async {
+                    self.commandInProgress = false
+                    if code != 0 { self.showConnectError(output) }
+                    self.refresh()
+                }
+            }
+        } else {
+            startConnectOrLogin()
+        }
+    }
+
+    // Shared by the Connect toggle and the explicit Log in… item. Guards
+    // against firing a second `tailscale up --reset` while one is already
+    // in flight: each `up` call cancels any previous one still waiting on
+    // browser auth (surfaces as "context canceled" / a fresh AuthURL each
+    // time), so a second click while mid-login was silently restarting the
+    // login instead of completing it. If a login is already in progress,
+    // just re-open whatever AuthURL is currently pending.
+    func startConnectOrLogin() {
+        if loginInProgress {
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let status = fetchStatus(), let urlString = status.authURL, !urlString.isEmpty, let url = URL(string: urlString) {
+                    DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+                }
+            }
+            return
+        }
+
+        // The wrapper automatically prefers a local proxy when present and
+        // unsets HTTP(S)_PROXY when none is available. Absence is not an error:
+        // direct access works on ordinary networks. Let tailscaled verify it.
+        loginInProgress = true
+        updateDashboard()
+        // Cached state only on the main thread. All CLI/network work is below.
+        let prefsBefore = currentPrefs
+        let statusBefore = currentStatus
+        let exitNodeTargetBefore: String? = {
+            guard let exitID = statusBefore?.exitNodeStatus?.ID else { return nil }
+            if let peer = statusBefore?.peer?[exitID], let ip = peer.TailscaleIPs?.first {
+                return ip
+            }
+            return exitID
+        }()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let detectedPort = [10808, 10809, 10820].first { self.isPortOpen($0) }
+            DispatchQueue.global(qos: .userInitiated).async { self.pollAndOpenAuthURL() }
+            // bare "up" fails with "requires mentioning all non-default
+            // flags" whenever persisted prefs (accept-routes, exit-node
+            // LAN access, ...) differ from tailscale's own defaults —
+            // which they usually do, since Preferences/exit-node menu
+            // set them via `tailscale set`. --reset sidesteps that instead
+            // of silently failing, but it also resets those prefs to
+            // tailscale's own defaults (accept-routes off, accept-dns on,
+            // shields-up off) — restore whatever the user had before, so
+            // every Connect/Log in doesn't quietly drop subnet routing etc.
+            let (output, code) = runTailscale(["up", "--reset"])
+            if code != 0 {
+                let hint = detectedPort == nil ? "\n\nПопытка без локального прокси не удалась. Если сеть блокирует Tailscale, запустите INCY или Happ и повторите подключение." : ""
+                DispatchQueue.main.async { self.showConnectError(output + hint) }
+            } else {
+                // Subnet routes (home/office LANs) should just always be
+                // accepted on this device — don't rely on "whatever it was
+                // right before this connect" since --reset can itself have
+                // already flattened that to false on a prior cycle, which
+                // then never recovers. accept-dns/shields-up still follow
+                // whatever the user had explicitly set.
+                var restoreArgs = ["--accept-routes=true"]
+                if let prefs = prefsBefore {
+                    if prefs.CorpDNS == false { restoreArgs.append("--accept-dns=false") }
+                    if prefs.ShieldsUp == true { restoreArgs.append("--shields-up=true") }
+                }
+                runTailscale(["set"] + restoreArgs)
+
+                // `up --reset` intentionally clears the exit-node preference.
+                // Restore it after the daemon is running so reconnecting from
+                // this UI does not silently turn a full tunnel into a subnet
+                // only connection.
+                if let exitNodeTargetBefore = exitNodeTargetBefore {
+                    let allowLAN = prefsBefore?.ExitNodeAllowLANAccess == true
+                    runTailscale(["set", "--exit-node=\(exitNodeTargetBefore)", "--exit-node-allow-lan-access=\(allowLAN)"])
+                }
+            }
+            DispatchQueue.main.async {
+                self.loginInProgress = false
+                self.refresh()
+            }
+        }
+    }
+
+    func showConnectError(_ output: String) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't connect"
+        alert.informativeText = output.isEmpty ? "tailscale up failed with no output." : output
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    // `tailscale up` obtains a login URL from the control server but, unlike
+    // running it in an interactive terminal, doesn't reliably auto-open it
+    // in a browser when invoked from a plain Process() like ours. Poll
+    // status for a few seconds and open it ourselves as soon as it appears.
+    func pollAndOpenAuthURL() {
+        var openedURL: String?
+        for _ in 0..<24 {
+            if let status = fetchStatus(), let urlString = status.authURL, !urlString.isEmpty {
+                if openedURL != urlString, let url = URL(string: urlString) {
+                    openedURL = urlString
+                    DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+                }
+            } else if openedURL != nil {
+                return // AuthURL cleared — login completed (or cancelled)
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    @objc func switchAccount(_ sender: NSMenuItem) {
+        guard let profileID = sender.representedObject as? String else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            runTailscale(["switch", profileID])
+            DispatchQueue.main.async { self.refresh() }
+        }
+    }
+
+    @objc func logOut(_ sender: NSMenuItem) {
+        let alert = NSAlert()
+        alert.messageText = "Log out of Tailscale?"
+        alert.informativeText = "This disconnects and invalidates this device's key. You'll need to re-authenticate to reconnect."
+        alert.addButton(withTitle: "Log Out")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (output, code) = runTailscale(["logout"])
+            DispatchQueue.main.async {
+                self.loginInProgress = false
+                if code != 0 {
+                    self.showConnectError(output.isEmpty ? "tailscale logout failed (exit code \(code))." : output)
+                }
+                self.refresh()
+            }
+        }
+    }
+
+    @objc func logIn(_ sender: NSMenuItem) {
+        startConnectOrLogin()
+    }
+
+    @objc func copyToClipboard(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    @objc func openInBrowser(_ sender: NSMenuItem) {
+        guard let ip = sender.representedObject as? String, let url = URL(string: "http://\(ip)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc func openAdminConsole(_ sender: NSMenuItem) {
+        if let url = URL(string: "https://login.tailscale.com/admin/machines") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc func selectExitNode(_ sender: NSMenuItem) {
+        guard !commandInProgress, !loginInProgress, let target = sender.representedObject as? String else { return }
+        commandInProgress = true
+        updateDashboard()
+        let allowLAN = currentPrefs?.ExitNodeAllowLANAccess == true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (output, code) = runTailscale(["set", "--exit-node=\(target)", "--exit-node-allow-lan-access=\(allowLAN)"])
+            DispatchQueue.main.async {
+                self.commandInProgress = false
+                if code != 0 { self.showConnectError(output) }
+                self.refresh()
+            }
+        }
+    }
+
+    @objc func toggleAllowLAN(_ sender: NSMenuItem) {
+        let newValue = !(currentPrefs?.ExitNodeAllowLANAccess == true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            runTailscale(["set", "--exit-node-allow-lan-access=\(newValue)"])
+            DispatchQueue.main.async { self.refresh() }
+        }
+    }
+
+    @objc func toggleAdvertiseExitNode(_ sender: NSMenuItem) {
+        let newValue = !(currentPrefs?.AdvertiseRoutes?.contains("0.0.0.0/0") == true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            runTailscale(["set", "--advertise-exit-node=\(newValue)"])
+            DispatchQueue.main.async { self.refresh() }
+        }
+    }
+
+    // The watchdog daemon repairs a missing default route within ~5s (the
+    // known exit-node-teardown bug), but the app can surface it immediately
+    // instead of leaving the user staring at a silently broken connection.
+    func verifyRouteAfterExitNodeChange() {
+        Thread.sleep(forTimeInterval: 1.5)
+        let hasRoute = checkDefaultRouteExists()
+        if !hasRoute {
+            postNotification(title: "Repairing network route", body: "Default route was dropped after the exit-node change — the watchdog is restoring it.")
+        }
+    }
+
+    func checkDefaultRouteExists() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/netstat")
+        process.arguments = ["-rn", "-f", "inet"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+        } catch {
+            return true
+        }
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return output.split(separator: "\n").contains { $0.split(whereSeparator: { $0.isWhitespace }).first == "default" }
+    }
+
+    @objc func togglePref(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        let prefs = currentPrefs
+        DispatchQueue.global(qos: .userInitiated).async {
+            switch key {
+            case "accept-routes":
+                let newVal = !(prefs?.RouteAll == true)
+                runTailscale(["set", "--accept-routes=\(newVal)"])
+            case "accept-dns":
+                let newVal = !(prefs?.CorpDNS == true)
+                runTailscale(["set", "--accept-dns=\(newVal)"])
+            case "allow-incoming":
+                let currentlyAllowed = (prefs?.ShieldsUp == false)
+                let newAllowed = !currentlyAllowed
+                runTailscale(["set", "--shields-up=\(!newAllowed)"])
+            default:
+                break
+            }
+            DispatchQueue.main.async { self.refresh() }
+        }
+    }
+
+    @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            // reflect whatever the actual status ends up being on next refresh
+        }
+        refresh()
+    }
+
+    @objc func showHealthWarnings(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        let alert = NSAlert()
+        alert.messageText = "Tailscale health warnings"
+        alert.informativeText = text
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    @objc func sendFileToPeer(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? String else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Send file via Taildrop"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (output, code) = runTailscale(["file", "cp", url.path, "\(target):"])
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = code == 0 ? "File sent" : "Send failed"
+                alert.informativeText = output.isEmpty ? "\(url.lastPathComponent) → \(target)" : output
+                alert.alertStyle = code == 0 ? .informational : .warning
+                alert.runModal()
+            }
+        }
+    }
+
+    // MARK: notifications
+
+    func notifyOnChanges(newStatus: TSStatus?) {
+        let newBackendState = newStatus?.backendState
+        let newExitID = newStatus?.exitNodeStatus?.ID
+
+        if let prev = previousBackendState, let new = newBackendState, prev != new {
+            if new == "Running" {
+                postNotification(title: "Tailscale connected", body: nil)
+            } else if prev == "Running" {
+                postNotification(title: "Tailscale disconnected", body: "State: \(new)")
+            }
+        }
+
+        if previousBackendState != nil, previousExitNodeID != newExitID {
+            if let id = newExitID {
+                let name = newStatus?.peer?.values.first(where: { $0.ID == id })
+                    .map { displayName(dnsName: $0.DNSName, fallback: $0.HostName ?? "unknown") } ?? "unknown"
+                postNotification(title: "Exit node enabled", body: name)
+            } else if previousExitNodeID != nil {
+                postNotification(title: "Exit node disabled", body: nil)
+            }
+        }
+
+        previousBackendState = newBackendState
+        previousExitNodeID = newExitID
+    }
+
+    func postNotification(title: String, body: String?) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        if let body = body { content.body = body }
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    @objc func pingPeer(_ sender: NSMenuItem) {
+        guard let ip = sender.representedObject as? String else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (output, _) = runTailscale(["ping", "-c", "3", ip])
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Ping \(ip)"
+                alert.informativeText = output.isEmpty ? "No output" : output
+                alert.alertStyle = .informational
+                alert.runModal()
+            }
+        }
+    }
+}
+
+let app = NSApplication.shared
+if CommandLine.arguments.contains("--self-test") {
+    runInterfaceSelfTests()
+    exit(0)
+}
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.regular)
+app.run()

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>app.tailnetbridge.tailscaled-wrapper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/tailnet-bridge/tailscaled-wrapper.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/tailnet-bridge-tailscaled.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/tailnet-bridge-tailscaled.log</string>
+</dict>
+</plist>
