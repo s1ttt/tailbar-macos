@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — sleep and network recovery
+
+- Renamed to **Tailbar** (`Tailbar.app`, identifier `app.tailbar.menubar`,
+  services `app.tailbar.*`). See INSTALL.md for upgrading from 0.5.
+- Tailbar's own artwork: a nine-dot "bridge" glyph in the menu bar
+  (connected, exit node, exit node not answering, warning, connecting) and a
+  matching Dock icon, both drawn in code. The app no longer reads images from
+  the official Tailscale app and contains no third-party code.
 
 - Sleep and wake handling (Settings → Sleep and wake, on by default): with
   INCY/Happ keeping their VPN up during sleep, the app stops Tailscale before

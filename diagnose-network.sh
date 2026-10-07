@@ -8,7 +8,7 @@ section 'Time'
 date
 
 section 'LaunchDaemons'
-for service in app.tailnetbridge.route-watchdog app.tailnetbridge.tailscaled-wrapper homebrew.mxcl.tailscale; do
+for service in app.tailbar.route-watchdog app.tailbar.tailscaled-wrapper homebrew.mxcl.tailscale; do
   printf '%s\n' "$service"
   launchctl print "system/$service" 2>&1 |
     awk '/state =|program =|pid =|last exit code|Could not find service|not permitted/'
@@ -54,4 +54,4 @@ else
 fi
 
 section 'Recent watchdog log (entries may be from previous sessions)'
-tail -n 12 /var/log/tailnet-bridge-route-watchdog.log 2>&1
+tail -n 12 /var/log/tailbar-route-watchdog.log 2>&1

@@ -3,18 +3,18 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>app.tailnetbridge.route-watchdog</string>
+    <string>app.tailbar.route-watchdog</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/libexec/tailnet-bridge/tailscale-watchdog.sh</string>
+        <string>/usr/local/libexec/tailbar/tailscale-watchdog.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/tailnet-bridge-route-watchdog.log</string>
+    <string>/var/log/tailbar-route-watchdog.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/tailnet-bridge-route-watchdog.log</string>
+    <string>/var/log/tailbar-route-watchdog.log</string>
 </dict>
 </plist>

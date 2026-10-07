@@ -3,21 +3,21 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>TailscaleMenuBar</string>
+	<string>Tailbar</string>
 	<key>CFBundleIdentifier</key>
-	<string>app.tailnetbridge.menubar</string>
+	<string>app.tailbar.menubar</string>
 	<key>CFBundleName</key>
-	<string>Tailnet Bridge</string>
+	<string>Tailbar</string>
 	<key>CFBundleDisplayName</key>
-	<string>Tailnet Bridge</string>
+	<string>Tailbar</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.0</string>
+	<string>0.6.0</string>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>6</string>
 	<key>LSUIElement</key>
 	<false/>
 	<key>LSMinimumSystemVersion</key>

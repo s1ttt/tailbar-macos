@@ -13,26 +13,14 @@ func runInterfaceSelfTests() {
     check(events.first?["State"] as? Int == 5 && events.last?["State"] as? Int == 6, "Starting → Running order preserved")
     check(parser.feed(Data("{}\n{}\n".utf8)).count == 2, "coalesced empty events")
     check(parser.feed(Data(" \n".utf8)).isEmpty, "whitespace is ignored")
-    let icons = NativeStatusIcons()
-    let names = ["StatusBarIcon", "StatusBarIconDimmed", "StatusBarIconDefaultRouterOnline",
-                 "StatusBarIconDefaultRouterOffline", "StatusBarIconErrorOnline", "StatusBarIconErrorOffline"]
-    if Bundle(path: "/Applications/Tailscale.app") != nil {
-        for name in names {
-            check(icons.image(name)?.tiffRepresentation != nil, "macOS asset: \(name)")
-        }
-        check(icons.hasAnimation, "all 16 original macOS animation frames available")
-        let a = icons.image("StatusBarIcon")!
-        a.size = NSSize(width: 100, height: 100)
-        check(icons.image("StatusBarIcon")!.size.width == 22, "native 22pt canvas preserved; cached assets are copied")
-    }
     let delegate = AppDelegate()
-    for state in [AppDelegate.MatrixState.dim, .connected, .exitNode(online: true), .exitNode(online: false), .wave(frame: 15)] {
+    for state in [AppDelegate.MatrixState.dim, .connected, .exitNode(online: true), .exitNode(online: false), .warning, .wave(frame: 15)] {
         check(delegate.matrixIcon(state).tiffRepresentation != nil, "status icon renders")
     }
     check(delegate.animationTimer == nil, "no animation while idle")
-    delegate.nativeIcons = NativeStatusIcons(path: "/nonexistent/Tailscale.app")
-    check(!delegate.nativeIcons.hasAnimation, "missing original app uses fallback")
-    check(delegate.matrixIcon(.wave(frame: 16)).tiffRepresentation != nil, "fallback animation renders without original app")
+    check(TailbarGlyph.bridge == [3, 4, 5, 6, 8], "connected glyph is Tailbar's bridge: middle row plus bottom corners")
+    check((0..<TailbarGlyph.frameCount).allSatisfy { !TailbarGlyph.connectingFrame($0).isEmpty }, "every connecting frame shows a dot")
+    check(TailbarGlyph.connectingFrame(TailbarGlyph.buildOrder.count - 1) == TailbarGlyph.bridge, "connecting animation completes the bridge")
     let fixture = Data(#"{"BackendState":"Running","Self":{"TailscaleIPs":["100.64.0.1"],"DNSName":"mac.test.","UserID":1},"Peer":{"node":{"ID":"exit1","HostName":"demo-exit","TailscaleIPs":["100.64.0.2"],"Online":true,"ExitNodeOption":true,"UserID":1}},"ExitNodeStatus":{"ID":"exit1","Online":true},"User":{"1":{"LoginName":"test@example.invalid","DisplayName":"Test owner"}}}"#.utf8)
     let model = DashboardModel()
     model.status = try! JSONDecoder().decode(TSStatus.self, from: fixture)
@@ -63,8 +51,8 @@ func runInterfaceSelfTests() {
     let proxyOnly = ClientTransportStatus(proxyPort: 10808, checked: true)
     check(proxyOnly.modeLine.contains(":10808") && proxyOnly.runningClients.isEmpty, "background listener does not imply running GUI")
     check(proxyOnly.indicator == .proxyReady, "local listener gets green status dot")
-    let nativeDot = TransportDotView.topLeftDotCenter(in: NSRect(x: 0, y: 0, width: 22, height: 22), nativeImage: true)
-    check(nativeDot == NSPoint(x: 5, y: 17), "transport dot aligns with the native top-left matrix dot")
+    let dotCenter = TransportDotView.topLeftDotCenter(in: NSRect(x: 0, y: 0, width: 18, height: 18))
+    check(abs(dotCenter.x - 3.6) < 0.001 && abs(dotCenter.y - 14.4) < 0.001, "transport dot aligns with the glyph's top-left dot")
     let incyIfconfig = "en0: flags=8863<UP> mtu 1500\n\tinet 192.0.2.10 netmask 0xffffff00\nutun4: flags=8051<UP> mtu 1500\n\tinet 198.18.0.2 --> 198.18.0.1 netmask 0xffff0000\nutun5: flags=8051<UP> mtu 1280\n\tinet 100.64.0.1 --> 100.64.0.1\n"
     check(clientTunnelPresent(ifconfig: incyIfconfig), "INCY fake-IP utun is detected")
     check(!clientTunnelPresent(ifconfig: "en0: flags=8863<UP>\n\tinet 198.18.0.2 netmask 0xffffff00\nutun5: flags=8051<UP>\n\tinet 100.64.0.1 --> 100.64.0.1\n"), "fake-IP range off a utun is not INCY TUN")

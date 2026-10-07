@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="TailscaleMenuBar"
+APP_NAME="Tailbar"
 BUILD_DIR="$APP_NAME.app"
 
 rm -rf "$BUILD_DIR"
@@ -12,7 +12,7 @@ echo "Compiling..."
 # Keep the target below the host's newly-installed SDK/driver variant. The
 # CommandLineTools image currently has a mismatched SwiftShims module cache;
 # an explicit target plus a writable module cache makes rebuilds repeatable.
-SWIFT_MODULE_CACHE="/private/tmp/tailscale-menubar-swift-cache"
+SWIFT_MODULE_CACHE="/private/tmp/tailbar-swift-cache"
 mkdir -p "$SWIFT_MODULE_CACHE"
 swiftc -O -target arm64-apple-macosx15.0 \
   -Xcc "-fmodules-cache-path=$SWIFT_MODULE_CACHE" \

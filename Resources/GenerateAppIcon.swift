@@ -1,10 +1,11 @@
 import AppKit
 import Foundation
 
-// Locally drawn Dock icon based on the nine-dot geometry shown by the user.
-// The installed Tailscale app is a visual reference; no icon bytes are copied.
+// Tailbar's Dock icon, drawn entirely in code: a 3×3 dot grid whose lit dots
+// form a bridge (middle row plus bottom corners, see TailbarGlyph), with a
+// green top-left dot. Run on macOS: swift Resources/GenerateAppIcon.swift
 let destination = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "Resources/AppIcon.icns")
-let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("tailscale-dock-\(UUID().uuidString).iconset", isDirectory: true)
+let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("tailbar-dock-\(UUID().uuidString).iconset", isDirectory: true)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 defer { try? FileManager.default.removeItem(at: iconset) }
 
@@ -41,7 +42,7 @@ for (name, pixels) in sizes {
     let radius = side * 0.056
     for row in 0..<3 {
         for column in 0..<3 {
-            let bright = row == 1 || (row == 2 && column == 1)
+            let bright = row == 1 || (row == 2 && column != 1)
             if row == 0 && column == 0 {
                 NSColor(calibratedRed: 0.20, green: 0.78, blue: 0.35, alpha: 1).setFill()
             } else {

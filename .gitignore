@@ -15,7 +15,7 @@ UI-NOTES.md
 .env*
 
 # Generated or local release artifacts.
-TailscaleMenuBar.app/
+Tailbar.app/
 *.app/
 *.dSYM/
 *.zip

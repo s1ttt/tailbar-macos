@@ -1,8 +1,8 @@
-<p align="center"><img src="docs/icon.png" alt="Tailnet Bridge icon" width="96"></p>
+<p align="center"><img src="docs/icon.png" alt="Tailbar icon" width="96"></p>
 
-# Tailnet Bridge for macOS
+# Tailbar for macOS
 
-[![Build](https://github.com/s1ttt/tailnet-bridge-macos/actions/workflows/build.yml/badge.svg)](https://github.com/s1ttt/tailnet-bridge-macos/actions/workflows/build.yml)
+[![Build](https://github.com/s1ttt/tailbar-macos/actions/workflows/build.yml/badge.svg)](https://github.com/s1ttt/tailbar-macos/actions/workflows/build.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
 **An unofficial menu bar companion for the Homebrew `tailscaled` daemon.**
@@ -11,7 +11,7 @@ local INCY or Happ bootstrap proxy is available. Built for Apple Silicon and
 macOS 15 or later.
 
 > [!IMPORTANT]
-> Tailnet Bridge is independent of Tailscale, INCY, and Happ. It does not ship
+> Tailbar is independent of Tailscale, INCY, and Happ. It does not ship
 > a VPN engine, a VLESS/Trojan client, or Tailscale credentials. It controls a
 > separately installed Homebrew `tailscaled` through
 > `/var/run/tailscaled.socket`. The official Tailscale macOS app is a different
@@ -22,7 +22,11 @@ macOS 15 or later.
 
 ## What you get
 
-- A compact menu bar icon and a three-column window with devices, search, exit
+- A compact menu bar glyph of nine dots: the lit dots form a small bridge
+  when connected, add a top dot when an exit node carries your traffic (a
+  ring if it does not answer), show a ring in the middle on a health warning,
+  and build up dot by dot while connecting. All dots dim means disconnected.
+- A three-column window with devices, search, exit
   nodes, account state, settings, and diagnostics.
 - A colored **top-left dot** inside the menu bar's 3×3 icon: amber means the
   INCY/Happ app is running without a detected local proxy; green means a local
@@ -43,11 +47,11 @@ CONNECT behavior, internet access, DNS privacy, or the route to an exit node.
    `sudo brew services start tailscale`.
 2. Check that `tailscale --socket=/var/run/tailscaled.socket status` can reach
    the daemon (the app uses Homebrew's absolute CLI path).
-3. Download `TailscaleMenuBar-v0.5.0-macos-arm64.zip` from
-   [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases), unzip it,
-   and move `TailscaleMenuBar.app` to Applications.
+3. Download `Tailbar-v0.6.0-macos-arm64.zip` from
+   [Releases](https://github.com/s1ttt/tailbar-macos/releases), unzip it,
+   and move `Tailbar.app` to Applications.
 4. Open the app. The first launch creates its menu bar icon; opening the app
-   again, or choosing **Open Tailnet Bridge**, shows the window. Turn on the
+   again, or choosing **Open Tailbar**, shows the window. Turn on the
    connection, complete Tailscale sign-in if prompted, and select an exit node
    if desired.
 
@@ -61,7 +65,7 @@ service setup, and uninstall instructions.
 
 ```mermaid
 flowchart LR
-    UI["Tailnet Bridge<br/>menu bar and window"] -->|local CLI + pinned socket| TS["Homebrew tailscaled"]
+    UI["Tailbar<br/>menu bar and window"] -->|local CLI + pinned socket| TS["Homebrew tailscaled"]
     Client["INCY / Happ<br/>optional subscription client"] -->|local HTTP CONNECT listener| Wrapper["optional bootstrap wrapper"]
     Wrapper -->|starts with HTTP_PROXY if available| TS
     TS -->|tailnet / exit node| Net["Your tailnet"]
@@ -78,25 +82,30 @@ route helper are separate root-run services. Review their behavior in
 ## Privacy and scope
 
 This repository contains synthetic examples only. The release app does not
-bundle subscriptions, auth keys, tailnet data, route dumps, or the official
-Tailscale app's private macOS assets. It reads account and device details from
+bundle subscriptions, auth keys, tailnet data, route dumps, or any part of
+the official Tailscale app. It reads account and device details from
 your local daemon to display them; Tailscale itself handles authentication and
 network traffic. There is no project-specific analytics or telemetry endpoint.
 The automatic network repair checks reachability with an HTTP request to
 `captive.apple.com`, the URL macOS itself probes; turning that setting off
 stops it.
 
-The source is [BSD-3-Clause](LICENSE). Fallback icon code adapted from
-Tailscale's open-source systray retains its notice in
-[Third-party notices](THIRD_PARTY_NOTICES.md). The 3×3 Dock artwork is drawn
-locally from code, with a green dot to distinguish this app from the official
-client. This project is not endorsed by Tailscale.
+The source is [BSD-3-Clause](LICENSE). Tailbar's code and artwork are its
+own: the menu bar glyph and the Dock icon are drawn in code
+(`TailbarGlyph`, `Resources/GenerateAppIcon.swift`), and the app neither
+bundles nor reads any other app's images. See
+[Third-party notices](THIRD_PARTY_NOTICES.md).
+
+Tailscale is a trademark of Tailscale Inc. INCY and Happ belong to their
+respective owners. Their names appear here only to say what Tailbar works
+with. Tailbar is an independent project, not affiliated with, sponsored by,
+or endorsed by any of them.
 
 ## Build and contribute
 
 ```sh
 ./build.sh
-./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
+./Tailbar.app/Contents/MacOS/Tailbar --self-test
 ```
 
 The build requires Xcode Command Line Tools on Apple Silicon macOS 15+.

@@ -302,7 +302,7 @@ extension AppDelegate {
     /// more on failure. Background thread only.
     func restoreTailscale(_ snapshot: ReconnectSnapshot) -> (ok: Bool, outcome: String) {
         if fetchStatus()?.backendState == "NeedsLogin" {
-            return (false, "Tailscale needs login. Open Tailnet Bridge to sign in.")
+            return (false, "Tailscale needs login. Open Tailbar to sign in.")
         }
         var outcome = ""
         for attempt in 0..<2 {

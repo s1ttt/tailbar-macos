@@ -54,7 +54,7 @@ final class DashboardModel: ObservableObject {
         if prefs?.LoggedOut == true { return "Needs login" }
         return ["Running": "Connected", "Stopped": "Disconnected", "Starting": "Connecting…", "NeedsLogin": "Needs login", "NeedsMachineAuth": "Needs approval"][status?.backendState ?? ""] ?? "Service unavailable"
     }
-    var account: String { status?.currentTailnet?.Name ?? "Tailscale" }
+    var account: String { status?.currentTailnet?.Name ?? "Tailbar" }
     var rows: [DeviceRow] {
         var result = (status?.peer?.values.map { peer in
             DeviceRow(id: peer.ID ?? peer.TailscaleIPs?.first ?? peer.DNSName ?? "unknown",
@@ -357,16 +357,16 @@ final class DashboardController: NSWindowController, NSWindowDelegate, NSToolbar
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 520),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Tailnet Bridge"
+        window.title = "Tailbar"
         window.titleVisibility = .hidden
         window.toolbarStyle = .unified
         window.minSize = NSSize(width: 840, height: 500)
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("TailnetBridgeWindowV1")
+        window.setFrameAutosaveName("TailbarWindowV1")
         super.init(window: window)
         window.delegate = self
         window.contentView = NSHostingView(rootView: DashboardView(model: model))
-        let toolbar = NSToolbar(identifier: "TailnetBridgeToolbar")
+        let toolbar = NSToolbar(identifier: "TailbarToolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
