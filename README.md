@@ -43,7 +43,7 @@ CONNECT behavior, internet access, DNS privacy, or the route to an exit node.
    `sudo brew services start tailscale`.
 2. Check that `tailscale --socket=/var/run/tailscaled.socket status` can reach
    the daemon (the app uses Homebrew's absolute CLI path).
-3. Download `TailscaleMenuBar-v0.5.0-macos-arm64.zip` from
+3. Download `TailscaleMenuBar-v0.6.0-macos-arm64.zip` from
    [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases), unzip it,
    and move `TailscaleMenuBar.app` to Applications.
 4. Open the app. The first launch creates its menu bar icon; opening the app

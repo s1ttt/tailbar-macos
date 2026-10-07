@@ -21,13 +21,13 @@ and `/var/run/tailscaled.socket`.
    can coexist on disk, but it is a **different client**. Avoid running both
    VPN connections at once while diagnosing routes.
 
-3. Download `TailscaleMenuBar-v0.5.0-macos-arm64.zip` and its `.sha256` file
+3. Download `TailscaleMenuBar-v0.6.0-macos-arm64.zip` and its `.sha256` file
    from [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases).
    In Terminal, from the download directory:
 
    ```sh
-   shasum -a 256 -c TailscaleMenuBar-v0.5.0-macos-arm64.zip.sha256
-   unzip TailscaleMenuBar-v0.5.0-macos-arm64.zip
+   shasum -a 256 -c TailscaleMenuBar-v0.6.0-macos-arm64.zip.sha256
+   unzip TailscaleMenuBar-v0.6.0-macos-arm64.zip
    ```
 
 4. Move `TailscaleMenuBar.app` to `/Applications` in Finder, then open it.

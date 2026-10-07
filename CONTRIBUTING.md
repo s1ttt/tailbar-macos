@@ -26,3 +26,13 @@ The repository ignores the original author's local working notes; please keep
 your own diagnostics outside Git as well.
 
 By contributing, you agree to license your contribution under BSD-3-Clause.
+
+## Releasing
+
+1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in
+   `Resources/Info.plist`, move the CHANGELOG entries under the new version,
+   add `release-notes/vX.Y.Z.md`, and update the ZIP name in README.md and
+   docs/INSTALL.md.
+2. After that lands on `main`, run the **Release** workflow (Actions tab) with
+   the version. It builds and self-tests on Apple Silicon, then publishes
+   `vX.Y.Z` with the ZIP, its `.sha256`, and the release notes.

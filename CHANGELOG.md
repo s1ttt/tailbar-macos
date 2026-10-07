@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — sleep and network recovery
 
 - Sleep and wake handling (Settings → Sleep and wake, on by default): with
   INCY/Happ keeping their VPN up during sleep, the app stops Tailscale before

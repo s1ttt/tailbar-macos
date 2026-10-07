@@ -1,0 +1,49 @@
+name: Release
+
+# Run by hand from the Actions tab (or the API) on main. Builds and tests the
+# app on Apple Silicon, then publishes vX.Y.Z with the ZIP, its SHA-256 file
+# and release-notes/vX.Y.Z.md as the description.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v, e.g. 0.6.0 (must match Info.plist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version, notes and tag
+        run: |
+          plist_version=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)
+          test "$plist_version" = "$VERSION" || { echo "Info.plist has $plist_version, not $VERSION"; exit 1; }
+          test -f "release-notes/v$VERSION.md" || { echo "release-notes/v$VERSION.md is missing"; exit 1; }
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "Release v$VERSION already exists"; exit 1; fi
+      - name: Build and test
+        run: |
+          ./build.sh
+          codesign --verify --deep --strict TailscaleMenuBar.app
+          ./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
+      - name: Package
+        run: |
+          zip="TailscaleMenuBar-v$VERSION-macos-arm64.zip"
+          # ditto keeps the bundle's code signature and extended attributes.
+          ditto -c -k --keepParent TailscaleMenuBar.app "$zip"
+          shasum -a 256 "$zip" > "$zip.sha256"
+          shasum -a 256 -c "$zip.sha256"
+      - name: Publish release
+        run: |
+          zip="TailscaleMenuBar-v$VERSION-macos-arm64.zip"
+          gh release create "v$VERSION" "$zip" "$zip.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Tailnet Bridge v$VERSION" \
+            --notes-file "release-notes/v$VERSION.md" \
+            --latest
