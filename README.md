@@ -82,6 +82,9 @@ bundle subscriptions, auth keys, tailnet data, route dumps, or the official
 Tailscale app's private macOS assets. It reads account and device details from
 your local daemon to display them; Tailscale itself handles authentication and
 network traffic. There is no project-specific analytics or telemetry endpoint.
+The automatic network repair checks reachability with an HTTP request to
+`captive.apple.com`, the URL macOS itself probes; turning that setting off
+stops it.
 
 The source is [BSD-3-Clause](LICENSE). Fallback icon code adapted from
 Tailscale's open-source systray retains its notice in

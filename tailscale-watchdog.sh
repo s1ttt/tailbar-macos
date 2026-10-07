@@ -74,6 +74,15 @@ while true; do
     if $incy_tun && [ -z "$(route_if default)" ]; then
       /sbin/route -n add default -interface "$incy_if" >/dev/null 2>&1 || true
     fi
+    # Without INCY TUN the same teardown (or an exit node turned off) can leave
+    # Wi-Fi up with no unscoped default at all. Put back the uplink's own
+    # gateway from its scoped default, as configd does on a Wi-Fi restart.
+    if ! $incy_tun && [ -z "$(route_if default)" ]; then
+      uplink=$(/usr/sbin/netstat -rn -f inet | awk '$1 == "default" && $3 ~ /I/ && $4 !~ /^utun/ && $2 ~ /^[0-9.]+$/ {print $2; exit}')
+      if [ -n "$uplink" ] && /sbin/route -n add default "$uplink" >/dev/null 2>&1; then
+        echo "restored missing default route via $uplink"
+      fi
+    fi
     if [ "$now" -lt "$hold_until" ]; then
       :
     elif [ "$state" = Running ] && [ -n "$exit_id" ] && [ -n "$ts_if" ] && $incy_tun; then

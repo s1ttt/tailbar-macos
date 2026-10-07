@@ -283,21 +283,7 @@ extension AppDelegate {
         }
         guard proceed else { return }
 
-        var outcome = "", ok = false
-        if fetchStatus()?.backendState == "NeedsLogin" {
-            outcome = "Tailscale needs login. Open Tailnet Bridge to sign in."
-        } else {
-            for attempt in 0..<2 {
-                if attempt > 0 {
-                    takeTailscaleDown()
-                    Thread.sleep(forTimeInterval: 3)
-                }
-                let result = bringTailscaleUp(restoring: snapshot)
-                outcome = result.output
-                ok = result.ok && waitForRunning(timeout: 20) && exitNodeAnswers(snapshot.exitNodeTarget)
-                if ok { break }
-            }
-        }
+        let result = restoreTailscale(snapshot)
 
         DispatchQueue.main.async {
             self.pendingReconnect = nil
@@ -305,14 +291,41 @@ extension AppDelegate {
             self.commandInProgress = false
             // The outcome notification below replaces the generic connected/disconnected one.
             self.previousBackendState = nil
-            if ok {
-                self.postNotification(title: "Tailscale reconnected", body: snapshot.exitNodeTarget == nil ? nil : "Exit node restored")
-            } else {
-                let detail = outcome.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.postNotification(title: "Couldn't reconnect Tailscale",
-                                      body: (detail.isEmpty ? "" : detail + "\n") + "Check INCY / Happ, then use Reconnect Tailscale.")
-            }
+            self.notifyReconnectOutcome(result, snapshot: snapshot)
             self.refresh()
+            // A reconnect can succeed while the network is still broken around it.
+            self.scheduleHealthCheck(after: 5)
+        }
+    }
+
+    /// Brings Tailscale back as in `snapshot` and verifies it, cycling once
+    /// more on failure. Background thread only.
+    func restoreTailscale(_ snapshot: ReconnectSnapshot) -> (ok: Bool, outcome: String) {
+        if fetchStatus()?.backendState == "NeedsLogin" {
+            return (false, "Tailscale needs login. Open Tailnet Bridge to sign in.")
+        }
+        var outcome = ""
+        for attempt in 0..<2 {
+            if attempt > 0 {
+                takeTailscaleDown()
+                Thread.sleep(forTimeInterval: 3)
+            }
+            let result = bringTailscaleUp(restoring: snapshot)
+            outcome = result.output
+            if result.ok && waitForRunning(timeout: 20) && exitNodeAnswers(snapshot.exitNodeTarget) {
+                return (true, outcome)
+            }
+        }
+        return (false, outcome)
+    }
+
+    func notifyReconnectOutcome(_ result: (ok: Bool, outcome: String), snapshot: ReconnectSnapshot) {
+        if result.ok {
+            postNotification(title: "Tailscale reconnected", body: snapshot.exitNodeTarget == nil ? nil : "Exit node restored")
+        } else {
+            let detail = result.outcome.trimmingCharacters(in: .whitespacesAndNewlines)
+            postNotification(title: "Couldn't reconnect Tailscale",
+                             body: (detail.isEmpty ? "" : detail + "\n") + "Check INCY / Happ, then use Repair Network.")
         }
     }
 

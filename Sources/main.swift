@@ -231,6 +231,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Set while Tailscale is down for a sleep/wake or manual reconnect cycle.
     var pendingReconnect: ReconnectSnapshot?
     var waitingForUplink = false
+    var healthTimer: Timer?
+    var healthCheckRunning = false
+    var networkHealth = NetworkHealthReport()
+    var problemSince: Date?
+    var autoRepairAttempts = 0
+    var lastAutoRepair: Date?
+    var repairGaveUpNotified = false
+    var repairingNetwork = false
+    var lastInternetProbe = Date.distantPast
     var sleepGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -261,6 +270,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(timer!, forMode: .common)
         buildApplicationMenu()
         startSleepWakeHandling()
+        startNetworkHealthMonitor()
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refresh()
@@ -611,7 +621,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         exit.submenu = buildExitNodeMenu(status: status)
         exit.isEnabled = state == "Running" && !busy
         menu.addItem(exit)
-        if pendingReconnect != nil {
+        if !networkHealth.problems.isEmpty && !repairingNetwork {
+            let warning = NSMenuItem(title: networkHealth.line, action: #selector(repairNetwork(_:)), keyEquivalent: "")
+            warning.target = self
+            warning.isEnabled = !busy && pendingReconnect == nil
+            warning.toolTip = "Click to repair: stop Tailscale, restart Wi-Fi, reconnect"
+            menu.addItem(warning)
+        }
+        if repairingNetwork {
+            let repairing = NSMenuItem(title: "Repairing network…", action: nil, keyEquivalent: "")
+            repairing.isEnabled = false
+            menu.addItem(repairing)
+        } else if pendingReconnect != nil {
             let title = waitingForUplink ? "Tailscale reconnects when Wi-Fi is back" : "Reconnecting Tailscale…"
             let waiting = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             waiting.isEnabled = false
@@ -622,6 +643,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             reconnect.isEnabled = state == "Running" && !busy
             reconnect.toolTip = "Disconnect, wait for the network and INCY / Happ, then connect again"
             menu.addItem(reconnect)
+            let repair = NSMenuItem(title: "Repair Network", action: #selector(repairNetwork(_:)), keyEquivalent: "")
+            repair.target = self
+            repair.isEnabled = !busy
+            repair.toolTip = "Stop Tailscale, restart Wi-Fi, wait for INCY / Happ, then restore Tailscale"
+            menu.addItem(repair)
         }
         menu.addItem(.separator())
         let transport = NSMenuItem(title: clientTransport.menuSummary, action: nil, keyEquivalent: "")

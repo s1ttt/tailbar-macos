@@ -9,6 +9,14 @@
   exit node and checks it with `tailscale ping`.
 - **Reconnect Tailscale** in the menu bar menu and Settings runs the same
   cycle on demand.
+- Network health and repair (Settings, on by default): detects Wi-Fi up but no
+  working internet after changing networks, quitting INCY/Happ or turning an
+  exit node off. The causes covered: a missing default route, a route into a
+  dead tunnel, stale INCY/Tailscale DNS, a stuck exit node, or no answer from
+  `captive.apple.com`. The repair stops Tailscale, restarts Wi-Fi and restores
+  Tailscale with the same exit node, at most twice automatically. **Repair
+  Network** in the menu, Settings and Diagnostics runs it on demand.
+- The route helper restores a missing default route from the Wi-Fi gateway.
 - The INCY TUN route helper detects a wake, drops its `/1` routes at once,
   and waits 20 s before adding them back.
 

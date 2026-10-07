@@ -85,5 +85,26 @@ func runInterfaceSelfTests() {
     check(!splitDefaultRoutesPresent(netstat: asleepRoutes), "no /1 halves after cleanup")
     model.status = try! JSONDecoder().decode(TSStatus.self, from: fixture)
     check(exitNodeTarget(of: model.status) == "100.64.0.2", "reconnect restores the exit node by its tailnet IP")
+    let incyDNS = "DNS configuration\n\nresolver #1\n  search domain[0] : example.invalid\n  nameserver[0] : 198.18.0.2\n  if_index : 18 (utun4)\n\nDNS configuration (for scoped queries)\n\nresolver #1\n  nameserver[0] : 192.0.2.1\n"
+    check(primaryNameserver(scutilDNS: incyDNS) == "198.18.0.2", "default resolver is read from the unscoped DNS section")
+    check(liveInterfaces(ifconfig: incyIfconfig) == ["en0", "utun4", "utun5"], "interfaces with IPv4 addresses are live")
+    check(diagnoseNetwork(netstat: vpnRoutes, ifconfig: incyIfconfig, dns: incyDNS, tailscaleState: "Running").isEmpty,
+          "INCY TUN + Tailscale exit node is healthy")
+    let wifiOnly = "Destination        Gateway            Flags               Netif Expire\ndefault            192.0.2.1          UGScIg                en0\n"
+    let wifiIfconfig = "en0: flags=8863<UP> mtu 1500\n\tinet 192.0.2.10 netmask 0xffffff00\n"
+    check(diagnoseNetwork(netstat: wifiOnly, ifconfig: wifiIfconfig, dns: incyDNS, tailscaleState: "Stopped") == [.noPrimaryRoute, .staleClientDNS],
+          "INCY quit: Wi-Fi up, no default route, DNS still at INCY")
+    let deadTunnel = "Destination        Gateway            Flags               Netif Expire\ndefault            link#30            UCSg                utun9\ndefault            192.0.2.1          UGScIg                en0\n"
+    check(diagnoseNetwork(netstat: deadTunnel, ifconfig: wifiIfconfig, dns: "", tailscaleState: nil) == [.deadTunnelRoute("utun9")],
+          "default route into a tunnel without an address is dead")
+    let plainWiFi = "Destination        Gateway            Flags               Netif Expire\ndefault            192.0.2.1          UGScg                en0\n"
+    let tailscaleDNS = "DNS configuration\n\nresolver #1\n  nameserver[0] : 100.100.100.100\n"
+    check(diagnoseNetwork(netstat: plainWiFi, ifconfig: wifiIfconfig, dns: tailscaleDNS, tailscaleState: "Stopped") == [.staleTailscaleDNS],
+          "Tailscale DNS left behind while stopped")
+    check(diagnoseNetwork(netstat: plainWiFi, ifconfig: wifiIfconfig, dns: tailscaleDNS, tailscaleState: nil).isEmpty,
+          "unknown Tailscale state never counts as stale DNS")
+    let exitOnly = "Destination        Gateway            Flags               Netif Expire\n0/1                utun5              USc                 utun5\ndefault            192.0.2.1          UGScIg                en0\n128.0/1            utun5              USc                 utun5\n"
+    check(diagnoseNetwork(netstat: exitOnly, ifconfig: incyIfconfig, dns: "", tailscaleState: "Running").isEmpty,
+          "live /1 halves stand in for a default route")
     print("Self-tests do not start the app UI, access the daemon, or modify VPN settings.")
 }

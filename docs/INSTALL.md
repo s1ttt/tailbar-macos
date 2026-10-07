@@ -96,7 +96,8 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/app.tailnetbridge.route-w
 
 The helper adds `0.0.0.0/1` and `128.0.0.0/1` through the selected Tailscale
 exit node while its exact preconditions hold. After a wake it removes them and
-waits 20 s before adding them again. If you installed an earlier copy, repeat
+waits 20 s before adding them again. If Wi-Fi is up but the unscoped default
+route is missing, it restores the route from the Wi-Fi gateway. If you installed an earlier copy, repeat
 the `install` command above and run
 `sudo launchctl kickstart -k system/app.tailnetbridge.route-watchdog`. See [Networking](NETWORKING.md)
 for limitations and rollback behavior. These commands are examples for a new

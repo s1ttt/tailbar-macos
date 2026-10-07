@@ -33,6 +33,8 @@ final class DashboardModel: ObservableObject {
     @Published var sheet: String?
     @Published var hideDock = UserDefaults.standard.bool(forKey: "hideDockWhenClosed")
     @Published var reconnectAcrossSleep = true
+    @Published var autoRepair = true
+    @Published var networkHealth = "Network not checked yet"
     var onConnect: (() -> Void)?
     var onExit: ((String) -> Void)?
     var onHideDock: ((Bool) -> Void)?
@@ -42,6 +44,8 @@ final class DashboardModel: ObservableObject {
     var onAccount: (() -> Void)?
     var onReconnectAcrossSleep: ((Bool) -> Void)?
     var onReconnect: (() -> Void)?
+    var onAutoRepair: ((Bool) -> Void)?
+    var onRepairNetwork: (() -> Void)?
 
     var running: Bool { status?.backendState == "Running" && prefs?.LoggedOut != true }
     var canConnect: Bool { !busy && ["Running", "Stopped", "NeedsLogin"].contains(status?.backendState ?? "") }
@@ -134,7 +138,7 @@ private struct DashboardView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: Binding(get: { model.sheet != nil }, set: { if !$0 { model.sheet = nil } })) {
-            sheetContent.frame(width: 480).padding(24)
+            ScrollView { sheetContent.frame(width: 480).padding(24) }.frame(minHeight: 440, idealHeight: 620)
         }
     }
 
@@ -293,6 +297,12 @@ private struct DashboardView: View {
                 Text("For INCY / Happ set to keep the VPN on during sleep. Tailscale is stopped before sleep so its routes cannot trap the client's own connection, then started again once Wi-Fi and INCY / Happ are back. The exit node is kept.")
                     .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button("Reconnect Tailscale now") { model.onReconnect?() }.disabled(!model.running || model.busy)
+                Toggle("Detect and repair a broken network automatically", isOn: Binding(get: { model.autoRepair }, set: {
+                    model.autoRepair = $0; model.onAutoRepair?($0)
+                }))
+                Text("Covers Wi-Fi up but no internet after changing networks, quitting INCY / Happ, or turning an exit node off: a missing default route, a route into a dead tunnel, stale DNS, or an exit node that stopped answering. The repair stops Tailscale, restarts Wi-Fi, and restores Tailscale with the same exit node. At most two automatic attempts, then a notification. Checks internet reachability via captive.apple.com, the URL macOS itself uses.")
+                    .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Repair network now") { model.onRepairNetwork?() }.disabled(model.busy)
                 Divider()
                 Text("Network preferences").font(.headline)
                 preference("Use Tailscale subnets", key: "accept-routes", value: model.prefs?.RouteAll == true)
@@ -306,6 +316,9 @@ private struct DashboardView: View {
                 Text(model.transport.clientLine).textSelection(.enabled)
                 Text(model.transport.modeLine).font(.headline)
                 Text(model.transport.explanation).font(.callout).foregroundStyle(.secondary)
+                Text("Network health").font(.headline)
+                Text(model.networkHealth).textSelection(.enabled)
+                Button("Repair network now") { model.onRepairNetwork?() }.disabled(model.busy)
                 Text("IPv4 route").font(.headline)
                 Text(model.route).textSelection(.enabled)
                 Divider()
@@ -337,6 +350,8 @@ final class DashboardController: NSWindowController, NSWindowDelegate, NSToolbar
     var onAccount: (() -> Void)? { didSet { model.onAccount = onAccount } }
     var onReconnectAcrossSleep: ((Bool) -> Void)? { didSet { model.onReconnectAcrossSleep = onReconnectAcrossSleep } }
     var onReconnect: (() -> Void)? { didSet { model.onReconnect = onReconnect } }
+    var onAutoRepair: ((Bool) -> Void)? { didSet { model.onAutoRepair = onAutoRepair } }
+    var onRepairNetwork: (() -> Void)? { didSet { model.onRepairNetwork = onRepairNetwork } }
     var onClose: (() -> Void)?
 
     init() {
