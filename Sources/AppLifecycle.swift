@@ -62,6 +62,15 @@ extension AppDelegate {
                 let item = NSMenuItem(); item.representedObject = key; self?.togglePref(item)
             }
             controller.onLaunchAtLogin = { [weak self] in self?.toggleLaunchAtLogin(NSMenuItem()) }
+            controller.onReconnectAcrossSleep = { [weak self] value in self?.reconnectAcrossSleep = value }
+            controller.onReconnect = { [weak self] in self?.reconnectTailscale(nil) }
+            controller.model.reconnectAcrossSleep = reconnectAcrossSleep
+            controller.onAutoRepair = { [weak self] value in
+                self?.autoRepairNetwork = value
+                if value { self?.checkNetworkHealth() }
+            }
+            controller.onRepairNetwork = { [weak self] in self?.repairNetwork(nil) }
+            controller.model.autoRepair = autoRepairNetwork
             controller.onAccount = { [weak self] in
                 self?.buildAccountMenu().popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
             }
@@ -100,6 +109,7 @@ extension AppDelegate {
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
         timer?.invalidate()
+        healthTimer?.invalidate()
         stopAnimating()
         eventRefresh?.cancel()
         eventPipe?.fileHandleForReading.readabilityHandler = nil
@@ -109,8 +119,9 @@ extension AppDelegate {
 
     func updateDashboard() {
         dashboard?.model.transport = clientTransport
+        dashboard?.model.networkHealth = networkHealth.line
         dashboard?.update(status: currentStatus, prefs: currentPrefs,
-                          busy: loginInProgress || commandInProgress,
+                          busy: loginInProgress || commandInProgress || repairingNetwork,
                           proxy: proxyStatus, route: routeStatus)
     }
 

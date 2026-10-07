@@ -136,7 +136,7 @@ func formatBytes(_ bytes: Int64) -> String {
 // MARK: - CLI helper
 
 @discardableResult
-func runTailscale(_ args: [String]) -> (output: String, exitCode: Int32) {
+func runTailscale(_ args: [String], timeout: TimeInterval? = nil) -> (output: String, exitCode: Int32) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: tailscaleBin)
     // There is also an official Tailscale Network Extension installed on
@@ -153,7 +153,7 @@ func runTailscale(_ args: [String]) -> (output: String, exitCode: Int32) {
         return ("", -1)
     }
     let deadline = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-    deadline.schedule(deadline: .now() + (args.first == "up" ? 120 : 12))
+    deadline.schedule(deadline: .now() + (timeout ?? (args.first == "up" ? 120 : 12)))
     deadline.setEventHandler { if process.isRunning { process.terminate() } }
     deadline.resume()
     defer { deadline.cancel() }
@@ -227,6 +227,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var animationTimer: Timer?
     var animationFrame = 0
     var loginInProgress = false
+    var sleepObserver: SystemSleepObserver?
+    /// Set while Tailscale is down for a sleep/wake or manual reconnect cycle.
+    var pendingReconnect: ReconnectSnapshot?
+    var waitingForUplink = false
+    var healthTimer: Timer?
+    var healthCheckRunning = false
+    var networkHealth = NetworkHealthReport()
+    var problemSince: Date?
+    var autoRepairAttempts = 0
+    var lastAutoRepair: Date?
+    var repairGaveUpNotified = false
+    var repairingNetwork = false
+    var lastInternetProbe = Date.distantPast
+    var sleepGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -255,6 +269,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         RunLoop.main.add(timer!, forMode: .common)
         buildApplicationMenu()
+        startSleepWakeHandling()
+        startNetworkHealthMonitor()
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refresh()
@@ -605,6 +621,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         exit.submenu = buildExitNodeMenu(status: status)
         exit.isEnabled = state == "Running" && !busy
         menu.addItem(exit)
+        if !networkHealth.problems.isEmpty && !repairingNetwork {
+            let warning = NSMenuItem(title: networkHealth.line, action: #selector(repairNetwork(_:)), keyEquivalent: "")
+            warning.target = self
+            warning.isEnabled = !busy && pendingReconnect == nil
+            warning.toolTip = "Click to repair: stop Tailscale, restart Wi-Fi, reconnect"
+            menu.addItem(warning)
+        }
+        if repairingNetwork {
+            let repairing = NSMenuItem(title: "Repairing network…", action: nil, keyEquivalent: "")
+            repairing.isEnabled = false
+            menu.addItem(repairing)
+        } else if pendingReconnect != nil {
+            let title = waitingForUplink ? "Tailscale reconnects when Wi-Fi is back" : "Reconnecting Tailscale…"
+            let waiting = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            waiting.isEnabled = false
+            menu.addItem(waiting)
+        } else {
+            let reconnect = NSMenuItem(title: "Reconnect Tailscale", action: #selector(reconnectTailscale(_:)), keyEquivalent: "")
+            reconnect.target = self
+            reconnect.isEnabled = state == "Running" && !busy
+            reconnect.toolTip = "Disconnect, wait for the network and INCY / Happ, then connect again"
+            menu.addItem(reconnect)
+            let repair = NSMenuItem(title: "Repair Network", action: #selector(repairNetwork(_:)), keyEquivalent: "")
+            repair.target = self
+            repair.isEnabled = !busy
+            repair.toolTip = "Stop Tailscale, restart Wi-Fi, wait for INCY / Happ, then restore Tailscale"
+            menu.addItem(repair)
+        }
         menu.addItem(.separator())
         let transport = NSMenuItem(title: clientTransport.menuSummary, action: nil, keyEquivalent: "")
         transport.isEnabled = false
@@ -857,6 +901,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        // Connecting by hand ends a pending sleep/wake reconnect.
+        pendingReconnect = nil
 
         // The wrapper automatically prefers a local proxy when present and
         // unsets HTTP(S)_PROXY when none is available. Absence is not an error:
@@ -866,13 +912,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Cached state only on the main thread. All CLI/network work is below.
         let prefsBefore = currentPrefs
         let statusBefore = currentStatus
-        let exitNodeTargetBefore: String? = {
-            guard let exitID = statusBefore?.exitNodeStatus?.ID else { return nil }
-            if let peer = statusBefore?.peer?[exitID], let ip = peer.TailscaleIPs?.first {
-                return ip
-            }
-            return exitID
-        }()
+        let exitNodeTargetBefore = exitNodeTarget(of: statusBefore)
         DispatchQueue.global(qos: .userInitiated).async {
             let detectedPort = [10808, 10809, 10820].first { self.isPortOpen($0) }
             DispatchQueue.global(qos: .userInitiated).async { self.pollAndOpenAuthURL() }
@@ -890,27 +930,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let hint = detectedPort == nil ? "\n\nПопытка без локального прокси не удалась. Если сеть блокирует Tailscale, запустите INCY или Happ и повторите подключение." : ""
                 DispatchQueue.main.async { self.showConnectError(output + hint) }
             } else {
-                // Subnet routes (home/office LANs) should just always be
-                // accepted on this device — don't rely on "whatever it was
-                // right before this connect" since --reset can itself have
-                // already flattened that to false on a prior cycle, which
-                // then never recovers. accept-dns/shields-up still follow
-                // whatever the user had explicitly set.
-                var restoreArgs = ["--accept-routes=true"]
-                if let prefs = prefsBefore {
-                    if prefs.CorpDNS == false { restoreArgs.append("--accept-dns=false") }
-                    if prefs.ShieldsUp == true { restoreArgs.append("--shields-up=true") }
-                }
-                runTailscale(["set"] + restoreArgs)
-
-                // `up --reset` intentionally clears the exit-node preference.
-                // Restore it after the daemon is running so reconnecting from
-                // this UI does not silently turn a full tunnel into a subnet
-                // only connection.
-                if let exitNodeTargetBefore = exitNodeTargetBefore {
-                    let allowLAN = prefsBefore?.ExitNodeAllowLANAccess == true
-                    runTailscale(["set", "--exit-node=\(exitNodeTargetBefore)", "--exit-node-allow-lan-access=\(allowLAN)"])
-                }
+                restorePrefsAfterReset(prefsBefore, exitNodeTarget: exitNodeTargetBefore)
             }
             DispatchQueue.main.async {
                 self.loginInProgress = false
@@ -1124,6 +1144,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func notifyOnChanges(newStatus: TSStatus?) {
         let newBackendState = newStatus?.backendState
         let newExitID = newStatus?.exitNodeStatus?.ID
+        // A reconnect cycle reports its own outcome; skip the down/up churn.
+        guard pendingReconnect == nil else {
+            previousBackendState = newBackendState
+            previousExitNodeID = newExitID
+            return
+        }
 
         if let prev = previousBackendState, let new = newBackendState, prev != new {
             if new == "Running" {
