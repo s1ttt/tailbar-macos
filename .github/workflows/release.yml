@@ -30,20 +30,20 @@ jobs:
       - name: Build and test
         run: |
           ./build.sh
-          codesign --verify --deep --strict TailscaleMenuBar.app
-          ./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
+          codesign --verify --deep --strict Tailbar.app
+          ./Tailbar.app/Contents/MacOS/Tailbar --self-test
       - name: Package
         run: |
-          zip="TailscaleMenuBar-v$VERSION-macos-arm64.zip"
+          zip="Tailbar-v$VERSION-macos-arm64.zip"
           # ditto keeps the bundle's code signature and extended attributes.
-          ditto -c -k --keepParent TailscaleMenuBar.app "$zip"
+          ditto -c -k --keepParent Tailbar.app "$zip"
           shasum -a 256 "$zip" > "$zip.sha256"
           shasum -a 256 -c "$zip.sha256"
       - name: Publish release
         run: |
-          zip="TailscaleMenuBar-v$VERSION-macos-arm64.zip"
+          zip="Tailbar-v$VERSION-macos-arm64.zip"
           gh release create "v$VERSION" "$zip" "$zip.sha256" \
             --target "$GITHUB_SHA" \
-            --title "Tailnet Bridge v$VERSION" \
+            --title "Tailbar v$VERSION" \
             --notes-file "release-notes/v$VERSION.md" \
             --latest

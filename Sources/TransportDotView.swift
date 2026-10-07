@@ -1,8 +1,8 @@
 import AppKit
 
-/// A single colored dot within the status item's existing 3×3 matrix.
-/// Keeping the native image as a template preserves its macOS appearance;
-/// this transparent, non-interactive view colors only the top-left dot.
+/// A single colored dot within the status item's 3×3 glyph. The glyph stays a
+/// template image so it follows the menu bar's appearance; this transparent,
+/// non-interactive view colors only the top-left dot.
 final class TransportDotView: NSView {
     var indicator: TransportIndicator = .none {
         didSet { isHidden = indicator == .none; needsDisplay = true }
@@ -18,11 +18,9 @@ final class TransportDotView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    static func topLeftDotCenter(in imageRect: NSRect, nativeImage: Bool) -> NSPoint {
-        // Measured from the installed 22×22 macOS image: left/top dot centers
-        // are x=5 and y=17 in AppKit's bottom-origin coordinates. The fallback
-        // 18×18 matrix has its own documented 3.6/14.4 geometry.
-        let fraction: CGFloat = nativeImage ? 5.0 / 22.0 : 3.6 / 18.0
+    static func topLeftDotCenter(in imageRect: NSRect) -> NSPoint {
+        // TailbarGlyph's 18×18 canvas puts the top-left centre at 3.6 / 14.4.
+        let fraction: CGFloat = 3.6 / 18.0
         return NSPoint(x: imageRect.minX + imageRect.width * fraction,
                        y: imageRect.maxY - imageRect.height * fraction)
     }
@@ -37,10 +35,9 @@ final class TransportDotView: NSView {
 
         let button = superview as? NSButton
         let imageRect = button?.cell?.imageRect(forBounds: button?.bounds ?? bounds)
-            ?? NSRect(x: bounds.midX - 11, y: bounds.midY - 11, width: 22, height: 22)
-        let nativeImage = (button?.image?.size.width ?? 22) >= 21
-        let center = Self.topLeftDotCenter(in: imageRect, nativeImage: nativeImage)
-        let radius = imageRect.width * (nativeImage ? 1.9 / 22.0 : 1.8 / 18.0)
+            ?? NSRect(x: bounds.midX - 9, y: bounds.midY - 9, width: 18, height: 18)
+        let center = Self.topLeftDotCenter(in: imageRect)
+        let radius = imageRect.width * 1.8 / 18.0
         let dot = NSRect(x: center.x - radius, y: center.y - radius,
                          width: radius * 2, height: radius * 2)
         color.setFill()

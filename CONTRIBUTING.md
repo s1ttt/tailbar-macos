@@ -10,8 +10,8 @@ On Apple Silicon macOS 15 or later:
 
 ```sh
 ./build.sh
-./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
-codesign --verify --deep --strict TailscaleMenuBar.app
+./Tailbar.app/Contents/MacOS/Tailbar --self-test
+codesign --verify --deep --strict Tailbar.app
 ```
 
 Self-tests do not connect to a tailnet or modify VPN settings. Test network

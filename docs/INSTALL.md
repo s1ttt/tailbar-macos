@@ -21,18 +21,18 @@ and `/var/run/tailscaled.socket`.
    can coexist on disk, but it is a **different client**. Avoid running both
    VPN connections at once while diagnosing routes.
 
-3. Download `TailscaleMenuBar-v0.6.0-macos-arm64.zip` and its `.sha256` file
+3. Download `Tailbar-v0.6.0-macos-arm64.zip` and its `.sha256` file
    from [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases).
    In Terminal, from the download directory:
 
    ```sh
-   shasum -a 256 -c TailscaleMenuBar-v0.6.0-macos-arm64.zip.sha256
-   unzip TailscaleMenuBar-v0.6.0-macos-arm64.zip
+   shasum -a 256 -c Tailbar-v0.6.0-macos-arm64.zip.sha256
+   unzip Tailbar-v0.6.0-macos-arm64.zip
    ```
 
-4. Move `TailscaleMenuBar.app` to `/Applications` in Finder, then open it.
+4. Move `Tailbar.app` to `/Applications` in Finder, then open it.
    The initial launch creates the menu bar icon. Open it again or choose
-   **Open Tailnet Bridge** to show the full window. Turn on Tailscale and
+   **Open Tailbar** to show the full window. Turn on Tailscale and
    complete the sign-in flow in your browser.
 
 This community binary has an ad-hoc code signature and is **not notarized**.
@@ -44,14 +44,33 @@ Do not grant VPN or root permissions to an unexpected app.
 
 ```sh
 ./build.sh
-./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
-codesign --verify --deep --strict TailscaleMenuBar.app
+./Tailbar.app/Contents/MacOS/Tailbar --self-test
+codesign --verify --deep --strict Tailbar.app
 ./install.sh
 ```
 
 `install.sh` installs **only the interface**. It preserves the previous
-`/Applications/TailscaleMenuBar.app` as a dated backup and restarts only the
+`/Applications/Tailbar.app` as a dated backup and restarts only the
 interface. It does not install or restart `tailscaled` or the route helper.
+
+### Upgrading from 0.5 (Tailnet Bridge / TailscaleMenuBar.app)
+
+Version 0.6.0 renamed the app to **Tailbar**. Quit the old app and move
+`/Applications/TailscaleMenuBar.app` to Trash (`install.sh` does this for
+you, keeping a dated backup). Because the app identifier changed too, turn on
+**Launch at login** again and re-check the settings once. If you installed the
+optional services from 0.5, remove them with the old names and install them
+again from the sections below:
+
+```sh
+sudo launchctl bootout system /Library/LaunchDaemons/app.tailnetbridge.route-watchdog.plist
+sudo launchctl bootout system /Library/LaunchDaemons/app.tailnetbridge.tailscaled-wrapper.plist
+sudo rm -f /Library/LaunchDaemons/app.tailnetbridge.*.plist
+sudo rm -rf /usr/local/libexec/tailnet-bridge
+```
+
+Run only the lines for services you actually installed; `bootout` on a
+service that does not exist just prints an error.
 
 ## Optional bootstrap proxy service
 
@@ -64,10 +83,10 @@ run them only when you can tolerate a VPN interruption:
 
 ```sh
 sudo brew services stop tailscale
-sudo install -d -m 755 /usr/local/libexec/tailnet-bridge
-sudo install -m 755 tailscaled-wrapper.sh /usr/local/libexec/tailnet-bridge/tailscaled-wrapper.sh
-sudo install -m 644 launchd/app.tailnetbridge.tailscaled-wrapper.plist /Library/LaunchDaemons/
-sudo launchctl bootstrap system /Library/LaunchDaemons/app.tailnetbridge.tailscaled-wrapper.plist
+sudo install -d -m 755 /usr/local/libexec/tailbar
+sudo install -m 755 tailscaled-wrapper.sh /usr/local/libexec/tailbar/tailscaled-wrapper.sh
+sudo install -m 644 launchd/app.tailbar.tailscaled-wrapper.plist /Library/LaunchDaemons/
+sudo launchctl bootstrap system /Library/LaunchDaemons/app.tailbar.tailscaled-wrapper.plist
 ```
 
 The wrapper checks `127.0.0.1` ports `10808`, `10809`, and `10820` every five
@@ -88,18 +107,18 @@ to its subscription server before installing it. The helper runs as root and
 may change IPv4 routes. It is not a general-purpose VPN merger or kill switch.
 
 ```sh
-sudo install -d -m 755 /usr/local/libexec/tailnet-bridge
-sudo install -m 755 tailscale-watchdog.sh /usr/local/libexec/tailnet-bridge/tailscale-watchdog.sh
-sudo install -m 644 launchd/app.tailnetbridge.route-watchdog.plist /Library/LaunchDaemons/
-sudo launchctl bootstrap system /Library/LaunchDaemons/app.tailnetbridge.route-watchdog.plist
+sudo install -d -m 755 /usr/local/libexec/tailbar
+sudo install -m 755 tailscale-watchdog.sh /usr/local/libexec/tailbar/tailscale-watchdog.sh
+sudo install -m 644 launchd/app.tailbar.route-watchdog.plist /Library/LaunchDaemons/
+sudo launchctl bootstrap system /Library/LaunchDaemons/app.tailbar.route-watchdog.plist
 ```
 
 The helper adds `0.0.0.0/1` and `128.0.0.0/1` through the selected Tailscale
 exit node while its exact preconditions hold. After a wake it removes them and
 waits 20 s before adding them again. If Wi-Fi is up but the unscoped default
-route is missing, it restores the route from the Wi-Fi gateway. If you installed an earlier copy, repeat
-the `install` command above and run
-`sudo launchctl kickstart -k system/app.tailnetbridge.route-watchdog`. See [Networking](NETWORKING.md)
+route is missing, it restores the route from the Wi-Fi gateway. To update an
+installed copy, repeat the `install` command above and run
+`sudo launchctl kickstart -k system/app.tailbar.route-watchdog`. See [Networking](NETWORKING.md)
 for limitations and rollback behavior. These commands are examples for a new
 installation; do not overlay them on an existing customized launchd setup
 without inspecting it first.
@@ -109,18 +128,18 @@ without inspecting it first.
 `bash diagnose-network.sh` is read-only, but its output can reveal device and
 IP details. Redact it before posting a bug report. `Quit` in the menu bar
 exits only the interface. To remove the UI, quit it and move
-`/Applications/TailscaleMenuBar.app` to Trash.
+`/Applications/Tailbar.app` to Trash.
 
 If you installed the optional services, stop them before removing their
 scripts. `bootout` sends a termination signal, allowing the route helper to
 remove the routes it owns:
 
 ```sh
-sudo launchctl bootout system /Library/LaunchDaemons/app.tailnetbridge.route-watchdog.plist
-sudo launchctl bootout system /Library/LaunchDaemons/app.tailnetbridge.tailscaled-wrapper.plist
+sudo launchctl bootout system /Library/LaunchDaemons/app.tailbar.route-watchdog.plist
+sudo launchctl bootout system /Library/LaunchDaemons/app.tailbar.tailscaled-wrapper.plist
 ```
 
-Move the two `app.tailnetbridge.*.plist` files out of
+Move the two `app.tailbar.*.plist` files out of
 `/Library/LaunchDaemons` so they will not load at the next boot, then start
 the ordinary service again with `sudo brew services start tailscale`.
 Verify the route table and daemon status before assuming network access is

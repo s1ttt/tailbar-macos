@@ -2,7 +2,7 @@ import AppKit
 
 final class MenuConnectionHeader: NSView {
     private let onToggle: () -> Void
-    private let titleLabel = NSTextField(labelWithString: "Tailscale")
+    private let titleLabel = NSTextField(labelWithString: "Tailbar")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private var hoverArea: NSTrackingArea?
     private var highlighted = false
@@ -28,7 +28,7 @@ final class MenuConnectionHeader: NSView {
         addSubview(titleLabel); addSubview(subtitleLabel); addSubview(toggle)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Tailscale, \(state)")
+        setAccessibilityLabel("Tailbar: Tailscale \(state)")
         setAccessibilityEnabled(enabled)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

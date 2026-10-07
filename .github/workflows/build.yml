@@ -16,7 +16,7 @@ jobs:
       - name: Build and verify app
         run: |
           ./build.sh
-          codesign --verify --deep --strict TailscaleMenuBar.app
+          codesign --verify --deep --strict Tailbar.app
       - name: Run AppKit self-tests on Apple Silicon runners
         if: runner.arch == 'ARM64'
-        run: ./TailscaleMenuBar.app/Contents/MacOS/TailscaleMenuBar --self-test
+        run: ./Tailbar.app/Contents/MacOS/Tailbar --self-test

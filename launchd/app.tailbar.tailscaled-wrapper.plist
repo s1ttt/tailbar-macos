@@ -3,18 +3,18 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>app.tailnetbridge.tailscaled-wrapper</string>
+    <string>app.tailbar.tailscaled-wrapper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/libexec/tailnet-bridge/tailscaled-wrapper.sh</string>
+        <string>/usr/local/libexec/tailbar/tailscaled-wrapper.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/tailnet-bridge-tailscaled.log</string>
+    <string>/var/log/tailbar-tailscaled.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/tailnet-bridge-tailscaled.log</string>
+    <string>/var/log/tailbar-tailscaled.log</string>
 </dict>
 </plist>

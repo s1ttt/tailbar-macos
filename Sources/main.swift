@@ -36,28 +36,26 @@ struct TSExitNodeStatus: Decodable {
     let Online: Bool?
 }
 
-// Fallback patterns from the open-source client/systray/logo.go (BSD-3-Clause).
-// These are NOT the closed-source macOS GUI assets; prefer NativeStatusIcons.
-// 0 = dim dot, 1 = bright dot, row-major, row 0 = top.
-let tsDotsDisconnected: [Int] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-let tsDotsConnected: [Int] = [0, 0, 0, 1, 1, 1, 0, 1, 0]
-let tsLoadingFrames: [[Int]] = [
-    [0, 1, 1, 1, 0, 1, 0, 0, 1],
-    [0, 1, 1, 0, 0, 1, 0, 1, 0],
-    [0, 1, 1, 0, 0, 0, 0, 0, 1],
-    [0, 0, 1, 0, 1, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 1, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 1, 0],
-    [0, 0, 0, 1, 0, 0, 1, 1, 0],
-    [0, 0, 0, 1, 1, 0, 0, 1, 0],
-    [0, 0, 0, 1, 1, 0, 0, 1, 1],
-    [0, 0, 0, 1, 1, 1, 0, 0, 1],
-    [0, 1, 0, 0, 1, 1, 1, 0, 1],
-]
+/// Tailbar's own status glyph, drawn in code: a 3×3 dot grid whose lit dots
+/// form a bridge (deck = middle row, piers = bottom corners). Indices are
+/// row-major with row 0 at the top. No third-party artwork or logo geometry.
+enum TailbarGlyph {
+    static let bridge: Set<Int> = [3, 4, 5, 6, 8]
+    /// Top centre: traffic leaves through an exit node.
+    static let exitMast = 1
+    /// Health warning: the centre of the deck is drawn as a ring.
+    static let warningSpot = 4
+    /// The connecting animation builds the bridge pier to pier, then clears it
+    /// from the first pier, always leaving at least one dot lit.
+    static let buildOrder = [6, 3, 4, 5, 8]
+    static var frameCount: Int { buildOrder.count * 2 - 1 }
+
+    static func connectingFrame(_ frame: Int) -> Set<Int> {
+        let step = frame % frameCount
+        let order = buildOrder
+        return step < order.count ? Set(order[...step]) : Set(order[(step - order.count + 1)...])
+    }
+}
 
 struct TSTailnet: Decodable {
     let Name: String?
@@ -213,7 +211,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var transportDot: TransportDotView?
     var workspaceObservers: [NSObjectProtocol] = []
     var routeStatus = "Маршрут ещё не проверен"
-    var nativeIcons = NativeStatusIcons()
     var dashboard: DashboardController?
     var eventProcess: Process?
     var eventPipe: Pipe?
@@ -244,7 +241,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = nativeIcons.image("StatusBarIconDimmed") ?? matrixIcon(.dim)
+        statusItem.button?.image = matrixIcon(.dim)
         statusItem.button?.image?.isTemplate = true
         if let button = statusItem.button {
             let dot = TransportDotView(frame: button.bounds)
@@ -331,113 +328,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: icon — 3x3 dot matrix, ported directly from Tailscale's own
-    // client/systray/logo.go geometry (radius=25, dim=250 → here scaled to
-    // an 18x18 canvas: spacing 0.3, dot centers at 0.2/0.5/0.8, radius 0.1).
+    // MARK: icon — see TailbarGlyph. An 18×18 template image: dot centres at
+    // 3.6 / 9 / 14.4 pt, radius 1.8 pt; unlit dots at 40 % opacity.
 
     enum MatrixState {
         case dim
         case connected
         case exitNode(online: Bool)
+        case warning
         case wave(frame: Int)
     }
 
     func matrixIcon(_ state: MatrixState) -> NSImage {
-        let resource: String
+        var lit = Set<Int>()
+        var ring: Int?
         switch state {
-        case .dim: resource = "StatusBarIconDimmed"
-        case .connected: resource = "StatusBarIcon"
-        case .exitNode(let online): resource = online ? "StatusBarIconDefaultRouterOnline" : "StatusBarIconDefaultRouterOffline"
-        case .wave(let frame): resource = nativeIcons.hasAnimation ? "StatusBarIconDot\(frame % 16 + 1)" : ""
-        }
-        if let native = nativeIcons.image(resource) { return native }
-        let canvasSize = NSSize(width: 18, height: 18)
-        let dotRadius: CGFloat = 1.8
-        let spacing: CGFloat = 5.4
-        let originX: CGFloat = 3.6
-        let originY: CGFloat = 3.6
-        let grayAlpha: CGFloat = 102.0 / 255.0 // matches logo.go's darkGray
-
-        let dots: [Int]
-        switch state {
-        case .dim: dots = tsDotsDisconnected
-        case .connected, .exitNode: dots = tsDotsConnected
-        case .wave(let frame): dots = tsLoadingFrames[frame % tsLoadingFrames.count]
+        case .dim:
+            break
+        case .connected:
+            lit = TailbarGlyph.bridge
+        case .exitNode(let online):
+            lit = TailbarGlyph.bridge
+            if online { lit.insert(TailbarGlyph.exitMast) } else { ring = TailbarGlyph.exitMast }
+        case .warning:
+            lit = TailbarGlyph.bridge.subtracting([TailbarGlyph.warningSpot])
+            ring = TailbarGlyph.warningSpot
+        case .wave(let frame):
+            lit = TailbarGlyph.connectingFrame(frame)
         }
 
-        let img = NSImage(size: canvasSize, flipped: false) { _ in
-            for row in 0..<3 {
-                for col in 0..<3 {
-                    let cx = originX + CGFloat(col) * spacing
-                    let cy = originY + CGFloat(2 - row) * spacing // row 0 = top
-                    let on = dots[row * 3 + col] != 0
-                    NSColor.black.withAlphaComponent(on ? 1.0 : grayAlpha).setFill()
-                    let dotRect = NSRect(x: cx - dotRadius, y: cy - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
-                    NSBezierPath(ovalIn: dotRect).fill()
-                }
-            }
-
-            if case .exitNode(let online) = state {
-                // arrow (or, if the exit node is unreachable, an X) overlapping
-                // the bottom-right dots — same position logo.go draws it at:
-                // x in [0.45, 0.95] of the canvas, y at the bottom row's height.
-                let x1 = canvasSize.width * 0.45
-                let x2 = canvasSize.width * 0.95
-                let y = originY // bottom row height
-                let tipSpread: CGFloat = 2.7
-
-                guard let ctx = NSGraphicsContext.current else { return true }
-                ctx.compositingOperation = .destinationOut
-                NSColor.black.setStroke() // full opacity — destinationOut erases proportionally to source alpha
-                let mask = NSBezierPath()
-                mask.lineWidth = 5.4
-                mask.lineCapStyle = .round
-                mask.move(to: NSPoint(x: x1, y: y)); mask.line(to: NSPoint(x: x2, y: y))
-                mask.move(to: NSPoint(x: x2 - tipSpread, y: y + tipSpread)); mask.line(to: NSPoint(x: x2, y: y))
-                mask.move(to: NSPoint(x: x2 - tipSpread, y: y - tipSpread)); mask.line(to: NSPoint(x: x2, y: y))
-                mask.stroke()
-                ctx.compositingOperation = .sourceOver
-
-                NSColor.black.setStroke()
-                let overlay = NSBezierPath()
-                overlay.lineWidth = 1.8
-                overlay.lineCapStyle = .round
-                if online {
-                    overlay.move(to: NSPoint(x: x1, y: y)); overlay.line(to: NSPoint(x: x2, y: y))
-                    overlay.move(to: NSPoint(x: x2 - tipSpread, y: y + tipSpread)); overlay.line(to: NSPoint(x: x2, y: y))
-                    overlay.move(to: NSPoint(x: x2 - tipSpread, y: y - tipSpread)); overlay.line(to: NSPoint(x: x2, y: y))
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let radius: CGFloat = 1.8
+            for index in 0..<9 {
+                let center = NSPoint(x: 3.6 + CGFloat(index % 3) * 5.4, y: 14.4 - CGFloat(index / 3) * 5.4)
+                let rect = NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+                if index == ring {
+                    NSColor.black.setStroke()
+                    let path = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
+                    path.lineWidth = 1
+                    path.stroke()
                 } else {
-                    // logo.go draws this in red; kept monochrome here so the
-                    // whole icon can stay a theme-adapting template image.
-                    overlay.move(to: NSPoint(x: x1 + 1, y: y + tipSpread)); overlay.line(to: NSPoint(x: x2 - 1, y: y - tipSpread))
-                    overlay.move(to: NSPoint(x: x1 + 1, y: y - tipSpread)); overlay.line(to: NSPoint(x: x2 - 1, y: y + tipSpread))
+                    NSColor.black.withAlphaComponent(lit.contains(index) ? 1 : 0.4).setFill()
+                    NSBezierPath(ovalIn: rect).fill()
                 }
-                overlay.stroke()
             }
-            return true
-        }
-        img.isTemplate = true
-        return img
-    }
-
-    // Not part of the real Tailscale icon set (logo.go has no error/warning
-    // variant) — a small addition to surface Health issues, so it fully
-    // replaces the base icon rather than partially overlaying it (a partial
-    // overlay let the grid's own dots peek out around the triangle).
-    func warningIcon() -> NSImage {
-        let canvasSize = NSSize(width: 18, height: 18)
-        let img = NSImage(size: canvasSize, flipped: false) { _ in
-            guard let symbol = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil) else { return true }
-            let config = NSImage.SymbolConfiguration(pointSize: canvasSize.height * 0.72, weight: .bold)
-            let configured = symbol.withSymbolConfiguration(config) ?? symbol
-            let badgeSize = configured.size
-            let badgeRect = NSRect(
-                x: (canvasSize.width - badgeSize.width) / 2,
-                y: (canvasSize.height - badgeSize.height) / 2,
-                width: badgeSize.width, height: badgeSize.height
-            )
-            NSColor.black.set()
-            configured.draw(in: badgeRect, from: .zero, operation: .sourceOver, fraction: 1.0)
             return true
         }
         img.isTemplate = true
@@ -467,9 +401,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 base = matrixIcon(.wave(frame: animationFrame))
                 description = "Tailscale: connecting…"
             default:
-                // logo.go's own switch treats every non-Running/Starting
-                // state (Stopped, NeedsLogin, NoState, ...) as "disconnected"
-                // — there's no separate icon for needing login.
+                // Stopped, NeedsLogin, NoState, ...: all shown as disconnected;
+                // the tooltip and menu say which.
                 base = matrixIcon(.dim)
                 description = state == "NeedsLogin" ? "Tailscale: needs login" : "Tailscale: disconnected"
                 stopAnimating()
@@ -486,7 +419,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // relay is unreachable).
         if status?.backendState == "Running", let health = status?.health, !health.isEmpty {
             description += " — \(health.count) health warning\(health.count == 1 ? "" : "s")"
-            base = nativeIcons.image("StatusBarIconErrorOnline") ?? base
+            base = matrixIcon(.warning)
         }
 
         base.isTemplate = true
@@ -518,11 +451,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func startAnimatingIfNeeded() {
         guard animationTimer == nil else { return }
         renderWaveFrame()
-        // 500 ms is documented in the open-source systray, not verified as
-        // the closed-source macOS client's timing. Native assets have 16 frames.
-        animationTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        animationTimer = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            self.animationFrame = (self.animationFrame + 1) % (self.nativeIcons.hasAnimation ? 16 : tsLoadingFrames.count)
+            self.animationFrame = (self.animationFrame + 1) % TailbarGlyph.frameCount
             self.renderWaveFrame()
         }
         RunLoop.main.add(animationTimer!, forMode: .common)
@@ -532,35 +463,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         animationTimer?.invalidate()
         animationTimer = nil
         animationFrame = 0
-    }
-
-    // Composites a small solid dot into the bottom-right corner of the base
-    // icon, with a transparent gap punched around it for legibility. The
-    // result stays a single-color template image so it still adapts to the
-    // menu bar's light/dark appearance — a colored badge would need to break
-    // template rendering and look wrong in light mode.
-    func badgedIcon(base: NSImage, description: String) -> NSImage {
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        let baseConfigured = base.withSymbolConfiguration(config) ?? base
-        let canvasSize = NSSize(width: 18, height: 18)
-
-        let composed = NSImage(size: canvasSize, flipped: false) { rect in
-            NSColor.black.set()
-            baseConfigured.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
-
-            guard let ctx = NSGraphicsContext.current else { return true }
-            ctx.compositingOperation = .destinationOut
-            NSColor.black.setFill() // full opacity — base's own drawing may have left a translucent fill color active
-            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 9, y: -1.5, width: 9, height: 9)).fill()
-            ctx.compositingOperation = .sourceOver
-
-            NSColor.black.setFill()
-            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 6.5, y: 0.5, width: 6, height: 6)).fill()
-            return true
-        }
-        composed.isTemplate = true
-        composed.accessibilityDescription = description
-        return composed
     }
 
     // MARK: menu
@@ -658,7 +560,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettingsWindow(_:)), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
-        let open = NSMenuItem(title: "Open Tailnet Bridge", action: #selector(showDashboard(_:)), keyEquivalent: "")
+        let open = NSMenuItem(title: "Open Tailbar", action: #selector(showDashboard(_:)), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
         menu.addItem(.separator())

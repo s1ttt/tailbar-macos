@@ -1,6 +1,6 @@
 # Networking model and limitations
 
-Tailnet Bridge talks only to a Homebrew `tailscaled` through the pinned local
+Tailbar talks only to a Homebrew `tailscaled` through the pinned local
 socket. The app can start or stop Tailscale, select an exit node, and display
 status. It does not implement VLESS, Trojan, SOCKS, a TUN interface, or routing
 itself. Those functions belong to separately installed software.
@@ -46,7 +46,7 @@ itself, or by the route helper) into Tailscale, whose underlay is the client
 itself. The result is a loop that previously needed every app quit and Wi-Fi
 toggled.
 
-Tailnet Bridge now repeats that manual fix automatically (**Settings → Sleep
+Tailbar now repeats that manual fix automatically (**Settings → Sleep
 and wake**, on by default):
 
 1. Before sleep, if Tailscale is connected, the app runs `tailscale down` and
