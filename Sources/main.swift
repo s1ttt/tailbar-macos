@@ -230,6 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var sleepObserver: SystemSleepObserver?
     /// Set while Tailscale is down for a sleep/wake or manual reconnect cycle.
     var pendingReconnect: ReconnectSnapshot?
+    var waitingForUplink = false
     var sleepGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -611,7 +612,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         exit.isEnabled = state == "Running" && !busy
         menu.addItem(exit)
         if pendingReconnect != nil {
-            let waiting = NSMenuItem(title: "Reconnecting Tailscale…", action: nil, keyEquivalent: "")
+            let title = waitingForUplink ? "Tailscale reconnects when Wi-Fi is back" : "Reconnecting Tailscale…"
+            let waiting = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             waiting.isEnabled = false
             menu.addItem(waiting)
         } else {
@@ -873,6 +875,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        // Connecting by hand ends a pending sleep/wake reconnect.
+        pendingReconnect = nil
 
         // The wrapper automatically prefers a local proxy when present and
         // unsets HTTP(S)_PROXY when none is available. Absence is not an error:

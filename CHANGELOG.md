@@ -4,8 +4,9 @@
 
 - Sleep and wake handling (Settings → Sleep and wake, on by default): with
   INCY/Happ keeping their VPN up during sleep, the app stops Tailscale before
-  sleep, waits after wake for Wi-Fi and the client's TUN/proxy, then
-  reconnects with the same exit node and checks it with `tailscale ping`.
+  sleep, waits after wake for Wi-Fi (no deadline, so a hotspot joined by hand
+  later still works) and the client's TUN/proxy, then reconnects with the same
+  exit node and checks it with `tailscale ping`.
 - **Reconnect Tailscale** in the menu bar menu and Settings runs the same
   cycle on demand.
 - The INCY TUN route helper detects a wake, drops its `/1` routes at once,

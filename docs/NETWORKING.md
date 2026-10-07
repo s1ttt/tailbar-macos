@@ -41,7 +41,8 @@ kept in memory; check `netstat -rn -f inet` before repairing routes manually.
 With INCY or Happ set to keep the VPN on while the Mac sleeps, a running
 Tailscale does not survive a lid close on its own. While Wi-Fi is down the
 client can lose the host route to its own server; after wake that traffic
-follows the helper's `/1` routes into Tailscale, whose underlay is the client
+follows the exit node's `0/1` and `128.0/1` routes (installed by `tailscaled`
+itself, or by the route helper) into Tailscale, whose underlay is the client
 itself. The result is a loop that previously needed every app quit and Wi-Fi
 toggled.
 
@@ -49,10 +50,12 @@ Tailnet Bridge now repeats that manual fix automatically (**Settings → Sleep
 and wake**, on by default):
 
 1. Before sleep, if Tailscale is connected, the app runs `tailscale down` and
-   holds sleep for a few seconds until the route helper has removed its `/1`
-   routes. INCY/Happ are left running.
-2. After a full wake, it waits (up to 45 s) for a Wi-Fi/Ethernet default
-   route and for the INCY TUN or local proxy that existed before sleep.
+   holds sleep for a few seconds until the `/1` routes are gone. INCY/Happ are
+   left running.
+2. After a full wake, it waits for a Wi-Fi/Ethernet default route with no time
+   limit (a phone hotspot may need joining by hand; the menu says so), then
+   up to 45 s for the INCY TUN or local proxy that existed before sleep.
+   Connecting by hand meanwhile cancels the automatic reconnect.
 3. It runs `tailscale up`. `down` keeps preferences, so the exit node is kept;
    if a plain `up` fails it falls back to `up --reset` and restores
    preferences as the Connect button does.

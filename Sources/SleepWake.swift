@@ -4,7 +4,8 @@ import IOKit.pwr_mgt
 // MARK: - sleep / wake recovery
 //
 // With INCY (or Happ) configured to keep its VPN up during sleep, a running
-// Tailscale plus the route helper's /1 routes do not survive a lid close:
+// Tailscale with an exit node (whose 0/1 and 128.0/1 routes come from
+// tailscaled itself or the route helper) does not survive a lid close:
 // while the link is down INCY can lose the host route to its own server, and
 // on wake that traffic follows the /1 routes into Tailscale, whose underlay is
 // INCY itself. Nothing recovers from that loop until every client restarts.
@@ -170,8 +171,8 @@ extension AppDelegate {
                           proxyPort: clientTransport.proxyPort)
     }
 
-    /// Runs `down` and waits for the root route helper (3-second poll) to drop
-    /// its /1 routes, so they do not outlive the tunnel. Background thread only.
+    /// Runs `down` and waits for the /1 routes to go (the root route helper
+    /// polls every 3 s), so they do not outlive the tunnel. Background thread only.
     func takeTailscaleDown() {
         let helperRoutes = splitDefaultRoutesPresent(netstat: commandOutput("/usr/sbin/netstat", ["-rn", "-f", "inet"]))
         runTailscale(["down"], timeout: 6)
@@ -207,13 +208,31 @@ extension AppDelegate {
     func recoverAfterWake() {
         guard let snapshot = pendingReconnect, !terminating else { return }
         let generation = sleepGeneration
+        waitingForUplink = true
         if !trackingMenu { rebuildMenu(status: currentStatus) }
         DispatchQueue.global(qos: .userInitiated).async {
-            self.waitForUnderlay(snapshot, timeout: 45)
+            // Starting Tailscale before Wi-Fi/Ethernet returns recreates the loop
+            // this cycle avoids, and only produces a false failure. A hotspot may
+            // need a manual join minutes later, so wait without a deadline; a new
+            // sleep or the user connecting by hand ends the wait.
+            while !physicalDefaultRoutePresent(netstat: commandOutput("/usr/sbin/netstat", ["-rn", "-f", "inet"])) {
+                guard self.reconnectStillPending(generation) else { return }
+                Thread.sleep(forTimeInterval: 3)
+            }
+            DispatchQueue.main.async {
+                self.waitingForUplink = false
+                if !self.trackingMenu { self.rebuildMenu(status: self.currentStatus) }
+            }
+            self.waitForClient(snapshot, timeout: 45)
             // INCY reconnects to its server only after the link is up.
             Thread.sleep(forTimeInterval: 3)
             self.finishReconnect(snapshot, generation: generation, holdingBusy: false)
         }
+    }
+
+    /// Background thread only.
+    func reconnectStillPending(_ generation: Int) -> Bool {
+        DispatchQueue.main.sync { self.sleepGeneration == generation && self.pendingReconnect != nil && !self.terminating }
     }
 
     /// Restart Tailscale on demand: the same cycle as sleep/wake, without sleeping.
@@ -232,15 +251,15 @@ extension AppDelegate {
         }
     }
 
-    /// Background thread only. Gives up after `timeout` and lets `up` try anyway.
-    func waitForUnderlay(_ snapshot: ReconnectSnapshot, timeout: TimeInterval) {
+    /// Waits for the INCY TUN / local proxy seen before sleep. Background thread
+    /// only. Gives up after `timeout` (the user may have switched modes) and
+    /// lets `up` try anyway.
+    func waitForClient(_ snapshot: ReconnectSnapshot, timeout: TimeInterval) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let routes = commandOutput("/usr/sbin/netstat", ["-rn", "-f", "inet"])
-            let uplink = physicalDefaultRoutePresent(netstat: routes)
             let proxy = snapshot.proxyPort.map { isPortOpen($0) } ?? true
             let tunnel = !snapshot.clientTunnel || clientTunnelPresent(ifconfig: commandOutput("/sbin/ifconfig", []))
-            if uplink && proxy && tunnel { return }
+            if proxy && tunnel { return }
             Thread.sleep(forTimeInterval: 2)
         }
     }
@@ -254,7 +273,7 @@ extension AppDelegate {
                 return false
             }
             // The user connected or logged in meanwhile; their action wins.
-            guard holdingBusy || (!self.loginInProgress && !self.commandInProgress) else {
+            guard holdingBusy || (self.pendingReconnect != nil && !self.loginInProgress && !self.commandInProgress) else {
                 self.pendingReconnect = nil
                 return false
             }
@@ -282,6 +301,7 @@ extension AppDelegate {
 
         DispatchQueue.main.async {
             self.pendingReconnect = nil
+            self.waitingForUplink = false
             self.commandInProgress = false
             // The outcome notification below replaces the generic connected/disconnected one.
             self.previousBackendState = nil
