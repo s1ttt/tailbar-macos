@@ -2,7 +2,8 @@
 
 Tailbar talks only to a Homebrew `tailscaled` through the pinned local
 socket. The app can start or stop Tailscale, select an exit node, and display
-status. It does not implement VLESS, Trojan, SOCKS, a TUN interface, or routing
+status. Its sleep and repair features may also stop and restore Tailscale and
+restart Wi-Fi (see below). It does not implement VLESS, Trojan, SOCKS, a TUN interface, or routing
 itself. Those functions belong to separately installed software.
 
 ## Three modes

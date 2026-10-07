@@ -5,10 +5,11 @@
 [![Build](https://github.com/s1ttt/tailbar-macos/actions/workflows/build.yml/badge.svg)](https://github.com/s1ttt/tailbar-macos/actions/workflows/build.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
-**An unofficial menu bar companion for the Homebrew `tailscaled` daemon.**
+**An unofficial menu bar app for the Homebrew `tailscaled` daemon.**
 Connect to a tailnet, browse devices, select an exit node, and see whether a
-local INCY or Happ bootstrap proxy is available. Built for Apple Silicon and
-macOS 15 or later.
+local INCY or Happ bootstrap proxy is available. Tailbar also keeps the
+network working across sleep, network changes and VPN client restarts.
+Built for Apple Silicon and macOS 15 or later.
 
 > [!IMPORTANT]
 > Tailbar is independent of Tailscale, INCY, and Happ. It does not ship
@@ -28,9 +29,18 @@ macOS 15 or later.
   and build up dot by dot while connecting. All dots dim means disconnected.
 - A three-column window with devices, search, exit
   nodes, account state, settings, and diagnostics.
-- A colored **top-left dot** inside the menu bar's 3×3 icon: amber means the
+- A colored **top-left dot** on the menu bar glyph: amber means the
   INCY/Happ app is running without a detected local proxy; green means a local
   TCP listener is available. The Dock icon has a permanent green identity dot.
+- **Sleep and wake** (on by default): Tailscale is stopped before the Mac
+  sleeps. After wake, Tailbar waits for Wi-Fi and INCY/Happ, then reconnects
+  with the same exit node, so a lid close no longer breaks the network.
+- **Network health and repair** (on by default): if Wi-Fi is up but the
+  internet is not, Tailbar finds out why and fixes it the way you would by
+  hand: stop Tailscale, restart Wi-Fi, restore Tailscale. Typical causes are a
+  missing default route, a route into a dead tunnel, stale DNS, or a stuck
+  exit node. **Reconnect Tailscale** and **Repair Network** are also in the
+  menu.
 - Automatic connection without a local proxy when none is detected. With the
   optional wrapper installed, `tailscaled` uses a detected HTTP CONNECT proxy
   on `127.0.0.1:10808`, `:10809`, or `:10820` and falls back to no local proxy
@@ -38,8 +48,9 @@ macOS 15 or later.
 - An optional route helper for a specific **INCY TUN + Tailscale exit node**
   setup. It is not installed by the app and is IPv4-only.
 
-The icon checks a listener's TCP port. It does **not** verify proxy auth,
-CONNECT behavior, internet access, DNS privacy, or the route to an exit node.
+The top-left dot checks only a listener's TCP port. It does **not** verify
+proxy auth, CONNECT behavior, internet access, DNS privacy, or the route to an
+exit node.
 
 ## Quick start
 
@@ -55,7 +66,11 @@ CONNECT behavior, internet access, DNS privacy, or the route to an exit node.
    connection, complete Tailscale sign-in if prompted, and select an exit node
    if desired.
 
-The public preview binary is **ad-hoc signed, not Apple-notarized**. macOS may
+Upgrading from **Tailnet Bridge 0.5** (`TailscaleMenuBar.app`)? Remove the old
+app and turn **Launch at login** on again; see
+[Upgrading from 0.5](docs/INSTALL.md#upgrading-from-05-tailnet-bridge--tailscalemenubarapp).
+
+The binary is **ad-hoc signed, not Apple-notarized**. macOS may
 require the [Open Anyway flow](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
 Check the published SHA-256 file before opening the download. See the
 [full installation guide](docs/INSTALL.md) for verification, source builds,
@@ -71,12 +86,18 @@ flowchart LR
     TS -->|tailnet / exit node| Net["Your tailnet"]
     Helper["optional INCY TUN route helper"] -->|IPv4 /1 routes when needed| Routes["macOS routing table"]
     TS --> Routes
+    UI -.->|"sleep / repair: stop, then restore"| TS
+    UI -.->|"repair: restart Wi-Fi"| WiFi["Wi-Fi"]
 ```
 
-The app only reads status and sends requested Tailscale commands. Closing the
-window keeps the interface in the menu bar; **Quit** exits the interface while
-leaving the daemon and VPN state alone. The optional bootstrap wrapper and
-route helper are separate root-run services. Review their behavior in
+Tailbar reads status and runs Tailscale commands: the ones you choose, plus
+stopping Tailscale before sleep and restoring it afterwards. When network
+repair is on, it may also restart Wi-Fi. It never changes routes itself and
+needs no administrator rights. Closing the window keeps the interface in the
+menu bar. **Quit** exits the interface and leaves the daemon and the current
+VPN state as they are; the sleep and repair features then stop until Tailbar
+runs again. The optional bootstrap wrapper and route helper are separate
+root-run services. Review their behavior in
 [Networking](docs/NETWORKING.md) before installing them.
 
 ## Privacy and scope
