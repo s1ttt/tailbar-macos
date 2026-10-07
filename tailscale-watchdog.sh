@@ -27,7 +27,20 @@ cleanup() {
 }
 trap 'cleanup; exit 0' TERM INT HUP
 
+last_tick=$(date +%s)
+hold_until=0
 while true; do
+  now=$(date +%s)
+  # Ticks are 3 s apart; a long gap means the Mac slept. While the link was
+  # down INCY may have lost the host route to its own server, and our /1
+  # routes would then send that traffic into Tailscale, whose underlay is
+  # INCY: a loop. Drop them now and let both clients settle before re-adding.
+  if [ $((now - last_tick)) -gt 30 ]; then
+    cleanup
+    hold_until=$((now + 20))
+    echo "wake detected; split routes held for 20 s"
+  fi
+  last_tick=$now
   # An unreadable API is not evidence that the user disabled the exit node.
   status=$("$TS" --socket=/var/run/tailscaled.socket status --json 2>/dev/null || true)
   state=$(printf '%s' "$status" | field BackendState || true)
@@ -61,7 +74,9 @@ while true; do
     if $incy_tun && [ -z "$(route_if default)" ]; then
       /sbin/route -n add default -interface "$incy_if" >/dev/null 2>&1 || true
     fi
-    if [ "$state" = Running ] && [ -n "$exit_id" ] && [ -n "$ts_if" ] && $incy_tun; then
+    if [ "$now" -lt "$hold_until" ]; then
+      :
+    elif [ "$state" = Running ] && [ -n "$exit_id" ] && [ -n "$ts_if" ] && $incy_tun; then
       if [ -n "$owned_if" ] && [ "$owned_if" != "$ts_if" ]; then cleanup; fi
       owned_if="$ts_if"
       for half in 0.0.0.0/1 128.0.0.0/1; do

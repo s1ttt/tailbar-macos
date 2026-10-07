@@ -62,6 +62,9 @@ extension AppDelegate {
                 let item = NSMenuItem(); item.representedObject = key; self?.togglePref(item)
             }
             controller.onLaunchAtLogin = { [weak self] in self?.toggleLaunchAtLogin(NSMenuItem()) }
+            controller.onReconnectAcrossSleep = { [weak self] value in self?.reconnectAcrossSleep = value }
+            controller.onReconnect = { [weak self] in self?.reconnectTailscale(nil) }
+            controller.model.reconnectAcrossSleep = reconnectAcrossSleep
             controller.onAccount = { [weak self] in
                 self?.buildAccountMenu().popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
             }

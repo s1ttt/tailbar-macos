@@ -32,6 +32,7 @@ final class DashboardModel: ObservableObject {
     @Published var selected: String?
     @Published var sheet: String?
     @Published var hideDock = UserDefaults.standard.bool(forKey: "hideDockWhenClosed")
+    @Published var reconnectAcrossSleep = true
     var onConnect: (() -> Void)?
     var onExit: ((String) -> Void)?
     var onHideDock: ((Bool) -> Void)?
@@ -39,6 +40,8 @@ final class DashboardModel: ObservableObject {
     var onPreference: ((String) -> Void)?
     var onLaunchAtLogin: (() -> Void)?
     var onAccount: (() -> Void)?
+    var onReconnectAcrossSleep: ((Bool) -> Void)?
+    var onReconnect: (() -> Void)?
 
     var running: Bool { status?.backendState == "Running" && prefs?.LoggedOut != true }
     var canConnect: Bool { !busy && ["Running", "Stopped", "NeedsLogin"].contains(status?.backendState ?? "") }
@@ -283,6 +286,14 @@ private struct DashboardView: View {
                 }))
                 Toggle("Launch at login", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { _ in model.onLaunchAtLogin?() }))
                 Divider()
+                Text("Sleep and wake").font(.headline)
+                Toggle("Disconnect before sleep, reconnect after wake", isOn: Binding(get: { model.reconnectAcrossSleep }, set: {
+                    model.reconnectAcrossSleep = $0; model.onReconnectAcrossSleep?($0)
+                }))
+                Text("For INCY / Happ set to keep the VPN on during sleep. Tailscale is stopped before sleep so its routes cannot trap the client's own connection, then started again once Wi-Fi and INCY / Happ are back. The exit node is kept.")
+                    .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Reconnect Tailscale now") { model.onReconnect?() }.disabled(!model.running || model.busy)
+                Divider()
                 Text("Network preferences").font(.headline)
                 preference("Use Tailscale subnets", key: "accept-routes", value: model.prefs?.RouteAll == true)
                 preference("Use Tailscale DNS", key: "accept-dns", value: model.prefs?.CorpDNS == true)
@@ -324,6 +335,8 @@ final class DashboardController: NSWindowController, NSWindowDelegate, NSToolbar
     var onPreference: ((String) -> Void)? { didSet { model.onPreference = onPreference } }
     var onLaunchAtLogin: (() -> Void)? { didSet { model.onLaunchAtLogin = onLaunchAtLogin } }
     var onAccount: (() -> Void)? { didSet { model.onAccount = onAccount } }
+    var onReconnectAcrossSleep: ((Bool) -> Void)? { didSet { model.onReconnectAcrossSleep = onReconnectAcrossSleep } }
+    var onReconnect: (() -> Void)? { didSet { model.onReconnect = onReconnect } }
     var onClose: (() -> Void)?
 
     init() {

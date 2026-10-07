@@ -65,5 +65,25 @@ func runInterfaceSelfTests() {
     check(proxyOnly.indicator == .proxyReady, "local listener gets green status dot")
     let nativeDot = TransportDotView.topLeftDotCenter(in: NSRect(x: 0, y: 0, width: 22, height: 22), nativeImage: true)
     check(nativeDot == NSPoint(x: 5, y: 17), "transport dot aligns with the native top-left matrix dot")
+    let incyIfconfig = "en0: flags=8863<UP> mtu 1500\n\tinet 192.0.2.10 netmask 0xffffff00\nutun4: flags=8051<UP> mtu 1500\n\tinet 198.18.0.2 --> 198.18.0.1 netmask 0xffff0000\nutun5: flags=8051<UP> mtu 1280\n\tinet 100.64.0.1 --> 100.64.0.1\n"
+    check(clientTunnelPresent(ifconfig: incyIfconfig), "INCY fake-IP utun is detected")
+    check(!clientTunnelPresent(ifconfig: "en0: flags=8863<UP>\n\tinet 198.18.0.2 netmask 0xffffff00\nutun5: flags=8051<UP>\n\tinet 100.64.0.1 --> 100.64.0.1\n"), "fake-IP range off a utun is not INCY TUN")
+    let vpnRoutes = """
+    Routing tables
+
+    Internet:
+    Destination        Gateway            Flags               Netif Expire
+    0/1                utun5              USc                 utun5
+    default            link#22            UCSg                utun4
+    default            192.0.2.1          UGScIg                en0
+    128.0/1            utun5              USc                 utun5
+    """
+    check(splitDefaultRoutesPresent(netstat: vpnRoutes), "route helper /1 halves are detected")
+    check(physicalDefaultRoutePresent(netstat: vpnRoutes), "scoped Wi-Fi default counts as a live uplink under a VPN")
+    let asleepRoutes = "Destination        Gateway            Flags               Netif Expire\ndefault            link#22            UCSg                utun4\n"
+    check(!physicalDefaultRoutePresent(netstat: asleepRoutes), "tunnel-only default is not a live uplink")
+    check(!splitDefaultRoutesPresent(netstat: asleepRoutes), "no /1 halves after cleanup")
+    model.status = try! JSONDecoder().decode(TSStatus.self, from: fixture)
+    check(exitNodeTarget(of: model.status) == "100.64.0.2", "reconnect restores the exit node by its tailnet IP")
     print("Self-tests do not start the app UI, access the daemon, or modify VPN settings.")
 }

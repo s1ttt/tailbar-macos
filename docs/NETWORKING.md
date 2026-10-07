@@ -36,6 +36,35 @@ Different INCY versions or other VPN clients may behave differently. An
 abrupt crash can leave the helper's routes behind because route ownership is
 kept in memory; check `netstat -rn -f inet` before repairing routes manually.
 
+## Sleep and wake
+
+With INCY or Happ set to keep the VPN on while the Mac sleeps, a running
+Tailscale does not survive a lid close on its own. While Wi-Fi is down the
+client can lose the host route to its own server; after wake that traffic
+follows the helper's `/1` routes into Tailscale, whose underlay is the client
+itself. The result is a loop that previously needed every app quit and Wi-Fi
+toggled.
+
+Tailnet Bridge now repeats that manual fix automatically (**Settings → Sleep
+and wake**, on by default):
+
+1. Before sleep, if Tailscale is connected, the app runs `tailscale down` and
+   holds sleep for a few seconds until the route helper has removed its `/1`
+   routes. INCY/Happ are left running.
+2. After a full wake, it waits (up to 45 s) for a Wi-Fi/Ethernet default
+   route and for the INCY TUN or local proxy that existed before sleep.
+3. It runs `tailscale up`. `down` keeps preferences, so the exit node is kept;
+   if a plain `up` fails it falls back to `up --reset` and restores
+   preferences as the Connect button does.
+4. It waits for `Running` and, with an exit node selected, a `tailscale ping`
+   to it. If either fails, it cycles once more and then notifies you.
+
+The same cycle is available at any time as **Reconnect Tailscale** in the menu
+bar menu and in Settings. If you quit the app or it is not running during
+sleep, nothing is stopped or restarted. The route helper also detects a wake
+on its own (a long gap between its 3-second polls): it drops its `/1` routes
+at once and waits 20 s before adding them again.
+
 ## Why the wrapper is separate
 
 `tailscaled` reads `HTTP_PROXY` and `HTTPS_PROXY` when it starts. The wrapper
