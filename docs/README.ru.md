@@ -16,7 +16,7 @@ Apple Silicon и macOS 15+.
    `sudo brew services start tailscale`.
 2. Проверьте связь с демоном:
    `/opt/homebrew/opt/tailscale/bin/tailscale --socket=/var/run/tailscaled.socket status`.
-3. Скачайте ZIP из [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases),
+3. Скачайте ZIP из [Releases](https://github.com/s1ttt/tailbar-macos/releases),
    проверьте SHA-256 и перенесите `Tailbar.app` в «Программы».
 4. Откройте приложение. Первый запуск создаёт значок в менюбаре; повторное
    открытие или пункт **Open Tailbar** показывает окно. Включите

@@ -22,7 +22,7 @@ and `/var/run/tailscaled.socket`.
    VPN connections at once while diagnosing routes.
 
 3. Download `Tailbar-v0.6.0-macos-arm64.zip` and its `.sha256` file
-   from [Releases](https://github.com/s1ttt/tailnet-bridge-macos/releases).
+   from [Releases](https://github.com/s1ttt/tailbar-macos/releases).
    In Terminal, from the download directory:
 
    ```sh
