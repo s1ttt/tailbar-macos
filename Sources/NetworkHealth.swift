@@ -45,6 +45,19 @@ struct NetworkHealthReport {
     }
 }
 
+func routeRows(_ netstat: String) -> [[Substring]] {
+    let lines: [Substring] = netstat.split(separator: "\n")
+    let rows: [[Substring]] = lines.map { (line: Substring) -> [Substring] in line.split(whereSeparator: { $0.isWhitespace }) }
+    return rows.filter { (row: [Substring]) -> Bool in row.count >= 4 }
+}
+
+/// Netif of every default route, scoped or not.
+func defaultRouteInterfaces(netstat: String) -> [String] {
+    var result: [String] = []
+    for row in routeRows(netstat) where row[0] == "default" { result.append(String(row[3])) }
+    return result
+}
+
 /// Interfaces that carry an IPv4 address.
 func liveInterfaces(ifconfig: String) -> Set<String> {
     var result = Set<String>()
@@ -74,19 +87,27 @@ func primaryNameserver(scutilDNS: String) -> String? {
 /// Local, side-effect-free checks on routes and DNS. `tailscaleState` is nil
 /// when the daemon could not be asked.
 func diagnoseNetwork(netstat: String, ifconfig: String, dns: String, tailscaleState: String?) -> [NetworkProblem] {
-    let rows = netstat.split(separator: "\n").map { $0.split(whereSeparator: { $0.isWhitespace }) }.filter { $0.count >= 4 }
     let live = liveInterfaces(ifconfig: ifconfig)
     var problems: [NetworkProblem] = []
 
-    let unscopedDefaults = rows.filter { $0[0] == "default" && !$0[2].contains("I") }
-    let halves = rows.filter { ($0[0] == "0/1" || $0[0] == "128.0/1") && live.contains(String($0[3])) }
-    let covered = Set(halves.map { String($0[0]) }).count == 2
-    if physicalDefaultRoutePresent(netstat: netstat), unscopedDefaults.isEmpty, !covered {
+    var unscopedDefault = false
+    var liveHalves = Set<String>()
+    var routedInterfaces: [String] = []
+    for row in routeRows(netstat) {
+        let destination = String(row[0])
+        let iface = String(row[3])
+        if destination == "default" && !row[2].contains(Character("I")) {
+            unscopedDefault = true
+            routedInterfaces.append(iface)
+        } else if destination == "0/1" || destination == "128.0/1" {
+            routedInterfaces.append(iface)
+            if live.contains(iface) { liveHalves.insert(destination) }
+        }
+    }
+    if physicalDefaultRoutePresent(netstat: netstat), !unscopedDefault, liveHalves.count < 2 {
         problems.append(.noPrimaryRoute)
     }
-
-    let routed = unscopedDefaults + rows.filter { $0[0] == "0/1" || $0[0] == "128.0/1" }
-    if let dead = routed.map({ String($0[3]) }).first(where: { $0.hasPrefix("utun") && !live.contains($0) }) {
+    if let dead = routedInterfaces.first(where: { $0.hasPrefix("utun") && !live.contains($0) }) {
         problems.append(.deadTunnelRoute(dead))
     }
 
@@ -153,7 +174,8 @@ extension AppDelegate {
         report.probed = probe
         if probe, report.problems.isEmpty, !internetAnswers(), !internetAnswers() {
             let target = status?.backendState == "Running" ? exitNodeTarget(of: status) : nil
-            report.problems.append(target != nil && !exitNodeAnswers(target) ? .exitNodeUnreachable : .noInternet)
+            let stuckExit = target != nil && !exitNodeAnswers(target)
+            report.problems.append(stuckExit ? NetworkProblem.exitNodeUnreachable : NetworkProblem.noInternet)
         }
         return report
     }
@@ -179,7 +201,9 @@ extension AppDelegate {
         // A check that skipped the internet probe cannot clear a failed probe;
         // otherwise it would also reset the automatic-repair limit.
         if !report.probed, report.uplink, report.problems.isEmpty {
-            report.problems = networkHealth.problems.filter { $0 == .noInternet || $0 == .exitNodeUnreachable }
+            report.problems = networkHealth.problems.filter { (problem: NetworkProblem) -> Bool in
+                problem == .noInternet || problem == .exitNodeUnreachable
+            }
         }
         let changed = report.line != networkHealth.line
         networkHealth = report
@@ -304,9 +328,8 @@ extension AppDelegate {
     /// Background thread only. Returns false when Wi-Fi was not restarted.
     func restartWiFi() -> Bool {
         guard let wifi = CWWiFiClient.shared().interface(), let name = wifi.interfaceName, wifi.powerOn() else { return false }
-        let rows = commandOutput("/usr/sbin/netstat", ["-rn", "-f", "inet"]).split(separator: "\n")
-            .map { $0.split(whereSeparator: { $0.isWhitespace }) }.filter { $0.count >= 4 && $0[0] == "default" }
-        let uplinks = rows.map { String($0[3]) }.filter { !$0.hasPrefix("utun") }
+        let uplinks = defaultRouteInterfaces(netstat: commandOutput("/usr/sbin/netstat", ["-rn", "-f", "inet"]))
+            .filter { !$0.hasPrefix("utun") }
         // An Ethernet uplink is not ours to bounce; Wi-Fi is merely idle then.
         guard uplinks.isEmpty || uplinks.contains(name) else { return false }
         do {
