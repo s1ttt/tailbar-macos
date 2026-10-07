@@ -8,7 +8,7 @@ extension AppDelegate {
         for (title, action, key) in [
             ("Open Tailnet Bridge", #selector(showDashboard(_:)), "0"),
             ("Settings…", #selector(showSettingsWindow(_:)), ","),
-            ("Hide Tailscale", #selector(NSApplication.hide(_:)), "h"),
+            ("Hide Tailnet Bridge", #selector(NSApplication.hide(_:)), "h"),
             ("Quit", #selector(quitApp(_:)), "q")
         ] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
