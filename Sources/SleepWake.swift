@@ -115,7 +115,8 @@ func physicalDefaultRoutePresent(netstat: String) -> Bool {
 
 func exitNodeTarget(of status: TSStatus?) -> String? {
     guard let exitID = status?.exitNodeStatus?.ID else { return nil }
-    if let peer = status?.peer?[exitID], let ip = peer.TailscaleIPs?.first { return ip }
+    // Peer is keyed by node key, not by the stable ID ExitNodeStatus reports.
+    if let peer = status?.peer?.values.first(where: { $0.ID == exitID }), let ip = peer.TailscaleIPs?.first { return ip }
     return exitID
 }
 
